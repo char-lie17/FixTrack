@@ -42,8 +42,8 @@ Proyecto FixTrack/
 │   │   ├── Seguridad.cs             ← SHA-256 hash/verify para contraseñas
 │   │   ├── ClienteDAL.cs            ← ObtenerTodos, ObtenerActivos, Buscar, ObtenerPorId, Insertar, Actualizar, CambiarEstado
 │   │   ├── DispositivoDAL.cs        ← ObtenerTodos, Buscar, ObtenerPorCliente, ObtenerPorId, Insertar, Actualizar
-│   │   ├── OrdenServicioDAL.cs      ← ObtenerTodos, Buscar, ObtenerPorTecnico, ObtenerPorId, Insertar, ActualizarDetalle, ActualizarEstado, ObtenerConteoPorEstado() sobrecargado, InsertarConPagoInicial
-│   │   ├── PagoDAL.cs               ← ObtenerTodos, Buscar, ObtenerPorOrden, ObtenerPorId, Insertar, ObtenerTotalPagado
+│   │   ├── OrdenServicioDAL.cs      ← ObtenerTodos, Buscar, ObtenerPorTecnico, ObtenerPorId, Insertar, ActualizarDetalle, ActualizarEstado, ObtenerHistorial, ObtenerConteoPorEstado() sobrecargado, InsertarConPagoInicial
+│   │   ├── PagoDAL.cs               ← ObtenerTodos, Buscar, ObtenerPorOrden, ObtenerPorId, Insertar, RegistrarPagoSeguro, ObtenerTotalPagado
 │   │   ├── TecnicoDAL.cs            ← ObtenerTodos, ObtenerActivos, Buscar, ObtenerPorId, Insertar, Actualizar, CambiarEstado
 │   │   ├── UsuarioDAL.cs            ← ObtenerTodos, Buscar, ObtenerPorId, ObtenerPorNombreUsuario, ExisteNombreUsuario, Insertar, Actualizar, CambiarEstado
 │   │   └── ReportesDAL.cs           ← ObtenerOrdenesPorEstado, ObtenerOrdenesPorTecnico, ObtenerServiciosCompletados (solo Entregado), ObtenerPagosRegistrados
@@ -61,7 +61,7 @@ Proyecto FixTrack/
 ├── Entregables/                     ← MOCKUPS (SOLO LECTURA — no modificar)
 ├── Contexto/                        ← Documentación previa (fuente de verdad)
 │   ├── 03_modulos.md                ← Estructura de módulos (Operación, Administración, Información)
-│   ├── 05_base_de_datos.md          ← Esquema completo de BD (6 tablas, constraints)
+│   ├── 05_base_de_datos.md          ← Esquema completo de BD y constraints
 │   ├── 09_identidad_visual.md       ← Colores, tipografía, logo, reportes oficiales
 │   ├── 10_usuarios_roles.md         ← Roles y accesos por rol (confirmado)
 │   ├── 11_reglas_negocio.md         ← Flujo, estados, reglas de integridad
@@ -75,7 +75,10 @@ Proyecto FixTrack/
 
 ## 2. MODELO DE DATOS
 
-### 2.1 Tablas del Sistema (6 tablas)
+### 2.1 Tablas del Sistema (7 tablas)
+
+Además de las entidades operativas, `HistorialOrdenes` conserva la trazabilidad de
+creaciones, cambios de estado, ediciones y pagos.
 
 **Clientes**
 | Columna | Tipo | Nullable | Default | Nota |
@@ -145,6 +148,19 @@ Proyecto FixTrack/
 | Rol | VARCHAR(30) | NOT NULL | — | CK IN ('Administrador','Empleado','Tecnico') |
 | Estado | VARCHAR(20) | NOT NULL | 'Activo' | Activo/Inactivo |
 | TecnicoID | INT | NULL | — | FK→Tecnicos, UQ filtrado (0..1) |
+
+**HistorialOrdenes**
+| Columna | Tipo | Nullable | Nota |
+|---------|------|----------|------|
+| HistorialID | INT IDENTITY | NOT NULL | PK |
+| OrdenID | INT | NOT NULL | FK→OrdenesServicio |
+| UsuarioID | INT | NULL | FK→Usuarios; NULL representa Sistema |
+| FechaCambio | DATETIME2 | NOT NULL | Fecha automática |
+| TipoCambio | VARCHAR(30) | NOT NULL | Creacion, Estado, Edicion o Pago |
+| EstadoAnterior / EstadoNuevo | VARCHAR(20) | NULL | Estados involucrados |
+| CampoModificado | VARCHAR(50) | NULL | Campo editado |
+| ValorAnterior / ValorNuevo | NVARCHAR(1000) | NULL | Valores auditados |
+| Comentario | NVARCHAR(500) | NULL | Descripción del evento |
 
 ### 2.2 Estados Válidos de Órdenes (5 estados)
 

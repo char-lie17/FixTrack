@@ -149,6 +149,33 @@ CREATE UNIQUE INDEX UQ_Usuarios_TecnicoID
     WHERE TecnicoID IS NOT NULL;
 GO
 
+-- HISTORIAL DE CAMBIOS DE ORDENES
+CREATE TABLE HistorialOrdenes
+(
+    HistorialID INT IDENTITY(1,1) NOT NULL,
+    OrdenID INT NOT NULL,
+    UsuarioID INT NULL,
+    FechaCambio DATETIME2 NOT NULL CONSTRAINT DF_HistorialOrdenes_FechaCambio DEFAULT (GETDATE()),
+    TipoCambio VARCHAR(30) NOT NULL,
+    EstadoAnterior VARCHAR(20) NULL,
+    EstadoNuevo VARCHAR(20) NULL,
+    CampoModificado VARCHAR(50) NULL,
+    ValorAnterior NVARCHAR(1000) NULL,
+    ValorNuevo NVARCHAR(1000) NULL,
+    Comentario NVARCHAR(500) NULL,
+
+    CONSTRAINT PK_HistorialOrdenes PRIMARY KEY (HistorialID),
+    CONSTRAINT FK_HistorialOrdenes_Orden FOREIGN KEY (OrdenID)
+        REFERENCES OrdenesServicio (OrdenID),
+    CONSTRAINT FK_HistorialOrdenes_Usuario FOREIGN KEY (UsuarioID)
+        REFERENCES Usuarios (UsuarioID)
+);
+GO
+
+CREATE INDEX IX_HistorialOrdenes_OrdenID_FechaCambio
+    ON HistorialOrdenes (OrdenID, FechaCambio DESC);
+GO
+
 CREATE INDEX IX_Dispositivos_ClienteID
     ON Dispositivos (ClienteID);
 GO
@@ -239,6 +266,18 @@ INSERT INTO Pagos (OrdenID, Monto, MetodoPago, Observaciones) VALUES
 (6, 50.00, 'Efectivo', 'Primer abono'),
 (6, 50.00, 'Transferencia', 'Segundo abono, saldo cancelado'),
 (3, 20.00, 'Tarjeta', 'Adelanto por repuesto');
+GO
+
+INSERT INTO HistorialOrdenes (OrdenID, UsuarioID, TipoCambio, EstadoNuevo, Comentario) VALUES
+(1, 1, 'Creacion', 'Pendiente', 'Orden de demostracion creada'),
+(2, 1, 'Creacion', 'En diagnostico', 'Orden de demostracion creada'),
+(3, 1, 'Creacion', 'En reparacion', 'Orden de demostracion creada'),
+(4, 1, 'Creacion', 'Listo', 'Orden de demostracion creada'),
+(5, 1, 'Creacion', 'Entregado', 'Orden de demostracion creada'),
+(6, 1, 'Creacion', 'Entregado', 'Orden de demostracion creada'),
+(7, 1, 'Creacion', 'Pendiente', 'Orden de demostracion creada'),
+(8, 1, 'Creacion', 'En diagnostico', 'Orden de demostracion creada'),
+(6, 1, 'Pago', NULL, 'Pagos de demostracion registrados');
 GO
 
 -- Consultas

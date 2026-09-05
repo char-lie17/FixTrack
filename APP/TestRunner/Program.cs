@@ -161,8 +161,40 @@ try
     var costo6 = orden6?.CostoServicio ?? 0m;
     Reportar("Saldo de la orden 6 nunca negativo", costo6 >= total, $"costo={costo6:C2} pagado={total:C2}");
 
+    var ordenHistorial = OrdenServicioDAL.Insertar(new OrdenServicio
+    {
+        DispositivoID = 1,
+        ProblemaReportado = "Prueba historial temporal",
+        CostoServicio = 10m
+    });
+    var historial = OrdenServicioDAL.ObtenerHistorial(ordenHistorial);
+    Reportar("Crear orden registra historial", historial.Count == 1 && historial[0].TipoCambio == "Creacion",
+        $"{historial.Count} eventos");
+
+    using (var conn = Conexion.ObtenerConexion())
+    {
+        conn.Open();
+        using var cmd = new SqlCommand(@"
+DELETE FROM HistorialOrdenes WHERE OrdenID = @OrdenID;
+DELETE FROM OrdenesServicio WHERE OrdenID = @OrdenID;", conn);
+        cmd.Parameters.AddWithValue("@OrdenID", ordenHistorial);
+        cmd.ExecuteNonQuery();
+    }
+    Reportar("Limpieza historial temporal", true, "OK");
+
     var costo0 = 0m;
     Reportar("Costo 0 + pago > 0 rechazado (regla app)", costo0 == 0m, "CHECK (Monto > 0) en BD impide pago en costo 0");
+
+    var pagoExcesivo = false;
+    try
+    {
+        PagoDAL.RegistrarPagoSeguro(new Pago { OrdenID = 6, Monto = costo6 + 1m, MetodoPago = "Efectivo" });
+    }
+    catch (ApplicationException)
+    {
+        pagoExcesivo = true;
+    }
+    Reportar("Pago superior al saldo rechazado en DAL", pagoExcesivo, "validación y bloqueo dentro de una transacción");
 }
 catch (Exception ex) { Reportar("PagoDAL", false, ex.Message); }
 

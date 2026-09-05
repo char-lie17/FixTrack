@@ -116,40 +116,101 @@ LEFT JOIN Tecnicos t ON o.TecnicoID = t.TecnicoID";
         return PagoDAL.ObtenerPorOrden(ordenId);
     }
 
+    public static List<HistorialOrden> ObtenerHistorial(int ordenId)
+    {
+        var lista = new List<HistorialOrden>();
+        using var conn = Conexion.ObtenerConexion();
+        conn.Open();
+        using var cmd = new SqlCommand(@"
+SELECT h.HistorialID, h.OrdenID, h.UsuarioID, h.FechaCambio, h.TipoCambio,
+       h.EstadoAnterior, h.EstadoNuevo, h.CampoModificado, h.ValorAnterior,
+       h.ValorNuevo, h.Comentario, ISNULL(u.NombreUsuario, 'Sistema')
+FROM HistorialOrdenes h
+LEFT JOIN Usuarios u ON h.UsuarioID = u.UsuarioID
+WHERE h.OrdenID = @OrdenID
+ORDER BY h.FechaCambio DESC, h.HistorialID DESC", conn);
+        cmd.Parameters.AddWithValue("@OrdenID", ordenId);
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) lista.Add(LeerHistorial(reader));
+        return lista;
+    }
+
     public static int Insertar(OrdenServicio o)
     {
         using var conn = Conexion.ObtenerConexion();
         conn.Open();
-        using var cmd = new SqlCommand(@"
+        using var tx = conn.BeginTransaction();
+        try
+        {
+            int ordenId;
+            using (var cmd = new SqlCommand(@"
 INSERT INTO OrdenesServicio (DispositivoID, TecnicoID, FechaIngreso, ProblemaReportado,
                              Estado, CostoServicio, Observaciones)
 VALUES (@DispositivoID, @TecnicoID, GETDATE(), @ProblemaReportado,
         'Pendiente', @CostoServicio, @Observaciones);
-SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
-        cmd.Parameters.AddWithValue("@DispositivoID", o.DispositivoID);
-        cmd.Parameters.AddWithValue("@TecnicoID", (object?)o.TecnicoID ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@ProblemaReportado", o.ProblemaReportado);
-        cmd.Parameters.AddWithValue("@CostoServicio", o.CostoServicio);
-        cmd.Parameters.AddWithValue("@Observaciones", (object?)o.Observaciones ?? DBNull.Value);
-        return (int)cmd.ExecuteScalar();
+SELECT CAST(SCOPE_IDENTITY() AS INT);", conn, tx))
+            {
+                AgregarParametrosOrden(cmd, o);
+                ordenId = (int)cmd.ExecuteScalar();
+            }
+            InsertarHistorial(conn, tx, ordenId, "Creacion", null, "Pendiente", null, null, null, "Orden creada");
+            tx.Commit();
+            return ordenId;
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
     }
 
     public static bool ActualizarDetalle(OrdenServicio o)
     {
         using var conn = Conexion.ObtenerConexion();
         conn.Open();
-        using var cmd = new SqlCommand(@"
-UPDATE OrdenesServicio SET Diagnostico = @Diagnostico, TrabajoRealizado = @TrabajoRealizado,
+        using var tx = conn.BeginTransaction();
+        try
+        {
+            var anterior = ObtenerPorId(conn, tx, o.OrdenID);
+            if (anterior == null)
+            {
+                tx.Rollback();
+                return false;
+            }
+
+            using var cmd = new SqlCommand(@"
+UPDATE OrdenesServicio SET ProblemaReportado = @ProblemaReportado,
+    Diagnostico = @Diagnostico, TrabajoRealizado = @TrabajoRealizado,
     CostoServicio = @CostoServicio, Observaciones = @Observaciones,
     FechaFinalizacion = @FechaFinalizacion
-WHERE OrdenID = @OrdenID", conn);
-        cmd.Parameters.AddWithValue("@Diagnostico", (object?)o.Diagnostico ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@TrabajoRealizado", (object?)o.TrabajoRealizado ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@CostoServicio", o.CostoServicio);
-        cmd.Parameters.AddWithValue("@Observaciones", (object?)o.Observaciones ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@FechaFinalizacion", (object?)o.FechaFinalizacion ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@OrdenID", o.OrdenID);
-        return cmd.ExecuteNonQuery() > 0;
+WHERE OrdenID = @OrdenID", conn, tx);
+            cmd.Parameters.AddWithValue("@ProblemaReportado", o.ProblemaReportado);
+            cmd.Parameters.AddWithValue("@Diagnostico", (object?)o.Diagnostico ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@TrabajoRealizado", (object?)o.TrabajoRealizado ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@CostoServicio", o.CostoServicio);
+            cmd.Parameters.AddWithValue("@Observaciones", (object?)o.Observaciones ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@FechaFinalizacion", (object?)o.FechaFinalizacion ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("@OrdenID", o.OrdenID);
+            if (cmd.ExecuteNonQuery() == 0)
+            {
+                tx.Rollback();
+                return false;
+            }
+
+            RegistrarCambio(conn, tx, o.OrdenID, "ProblemaReportado", anterior.ProblemaReportado, o.ProblemaReportado);
+            RegistrarCambio(conn, tx, o.OrdenID, "Diagnostico", anterior.Diagnostico, o.Diagnostico);
+            RegistrarCambio(conn, tx, o.OrdenID, "TrabajoRealizado", anterior.TrabajoRealizado, o.TrabajoRealizado);
+            RegistrarCambio(conn, tx, o.OrdenID, "CostoServicio", anterior.CostoServicio.ToString("F2"), o.CostoServicio.ToString("F2"));
+            RegistrarCambio(conn, tx, o.OrdenID, "Observaciones", anterior.Observaciones, o.Observaciones);
+            RegistrarCambio(conn, tx, o.OrdenID, "FechaFinalizacion", anterior.FechaFinalizacion?.ToString("O"), o.FechaFinalizacion?.ToString("O"));
+            tx.Commit();
+            return true;
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
     }
 
     /// <summary>
@@ -172,24 +233,105 @@ WHERE OrdenID = @OrdenID", conn);
     /// </summary>
     public static bool ActualizarEstado(int id, string nuevoEstado)
     {
-        var estadoActual = ObtenerEstadoActual(id);
-        if (estadoActual == null || !EstadoOrdenTexto.EsTransicionValida(estadoActual, nuevoEstado))
-            return false;
-
         using var conn = Conexion.ObtenerConexion();
         conn.Open();
-        using var cmd = new SqlCommand(@"
+        using var tx = conn.BeginTransaction();
+        try
+        {
+            using var estadoCmd = new SqlCommand("SELECT Estado FROM OrdenesServicio WITH (UPDLOCK, HOLDLOCK) WHERE OrdenID = @OrdenID", conn, tx);
+            estadoCmd.Parameters.AddWithValue("@OrdenID", id);
+            var estadoResultado = estadoCmd.ExecuteScalar();
+            var estadoActual = estadoResultado as string;
+            if (estadoActual == null || !EstadoOrdenTexto.EsTransicionValida(estadoActual, nuevoEstado))
+            {
+                tx.Rollback();
+                return false;
+            }
+
+            using var cmd = new SqlCommand(@"
 UPDATE OrdenesServicio SET Estado = @Estado,
     FechaFinalizacion = CASE
         WHEN @Estado IN ('Listo', 'Entregado') AND FechaFinalizacion IS NULL THEN GETDATE()
         WHEN @Estado NOT IN ('Listo', 'Entregado') THEN NULL
         ELSE FechaFinalizacion END
-WHERE OrdenID = @OrdenID AND Estado = @EstadoActual", conn);
-        cmd.Parameters.AddWithValue("@EstadoActual", estadoActual);
-        cmd.Parameters.AddWithValue("@Estado", nuevoEstado);
-        cmd.Parameters.AddWithValue("@OrdenID", id);
-        return cmd.ExecuteNonQuery() > 0;
+WHERE OrdenID = @OrdenID AND Estado = @EstadoActual", conn, tx);
+            cmd.Parameters.AddWithValue("@EstadoActual", estadoActual);
+            cmd.Parameters.AddWithValue("@Estado", nuevoEstado);
+            cmd.Parameters.AddWithValue("@OrdenID", id);
+            if (cmd.ExecuteNonQuery() == 0)
+            {
+                tx.Rollback();
+                return false;
+            }
+            InsertarHistorial(conn, tx, id, "Estado", estadoActual, nuevoEstado, null, null, null, "Cambio de estado");
+            tx.Commit();
+            return true;
+        }
+        catch
+        {
+            tx.Rollback();
+            throw;
+        }
     }
+
+    private static void AgregarParametrosOrden(SqlCommand cmd, OrdenServicio o)
+    {
+        cmd.Parameters.AddWithValue("@DispositivoID", o.DispositivoID);
+        cmd.Parameters.AddWithValue("@TecnicoID", (object?)o.TecnicoID ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@ProblemaReportado", o.ProblemaReportado);
+        cmd.Parameters.AddWithValue("@CostoServicio", o.CostoServicio);
+        cmd.Parameters.AddWithValue("@Observaciones", (object?)o.Observaciones ?? DBNull.Value);
+    }
+
+    private static OrdenServicio? ObtenerPorId(SqlConnection conn, SqlTransaction tx, int id)
+    {
+        using var cmd = new SqlCommand(SelectConJoin + " WHERE o.OrdenID = @OrdenID", conn, tx);
+        cmd.Parameters.AddWithValue("@OrdenID", id);
+        using var reader = cmd.ExecuteReader();
+        return reader.Read() ? Leer(reader) : null;
+    }
+
+    private static void RegistrarCambio(SqlConnection conn, SqlTransaction tx, int ordenId, string campo, string? anterior, string? nuevo)
+    {
+        if (string.Equals(anterior, nuevo, StringComparison.Ordinal)) return;
+        InsertarHistorial(conn, tx, ordenId, "Edicion", null, null, campo, anterior, nuevo, "Campo actualizado");
+    }
+
+    private static void InsertarHistorial(SqlConnection conn, SqlTransaction tx, int ordenId, string tipo, string? estadoAnterior,
+        string? estadoNuevo, string? campo, string? valorAnterior, string? valorNuevo, string? comentario)
+    {
+        using var cmd = new SqlCommand(@"
+INSERT INTO HistorialOrdenes (OrdenID, UsuarioID, TipoCambio, EstadoAnterior, EstadoNuevo,
+                              CampoModificado, ValorAnterior, ValorNuevo, Comentario)
+VALUES (@OrdenID, @UsuarioID, @TipoCambio, @EstadoAnterior, @EstadoNuevo,
+        @Campo, @ValorAnterior, @ValorNuevo, @Comentario)", conn, tx);
+        cmd.Parameters.AddWithValue("@OrdenID", ordenId);
+        cmd.Parameters.AddWithValue("@UsuarioID", Sesion.UsuarioID > 0 ? Sesion.UsuarioID : DBNull.Value);
+        cmd.Parameters.AddWithValue("@TipoCambio", tipo);
+        cmd.Parameters.AddWithValue("@EstadoAnterior", (object?)estadoAnterior ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@EstadoNuevo", (object?)estadoNuevo ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@Campo", (object?)campo ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@ValorAnterior", (object?)valorAnterior ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@ValorNuevo", (object?)valorNuevo ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("@Comentario", (object?)comentario ?? DBNull.Value);
+        cmd.ExecuteNonQuery();
+    }
+
+    private static HistorialOrden LeerHistorial(SqlDataReader r) => new()
+    {
+        HistorialID = r.GetInt32(0),
+        OrdenID = r.GetInt32(1),
+        UsuarioID = r.IsDBNull(2) ? null : r.GetInt32(2),
+        FechaCambio = r.GetDateTime(3),
+        TipoCambio = r.GetString(4),
+        EstadoAnterior = r.IsDBNull(5) ? null : r.GetString(5),
+        EstadoNuevo = r.IsDBNull(6) ? null : r.GetString(6),
+        CampoModificado = r.IsDBNull(7) ? null : r.GetString(7),
+        ValorAnterior = r.IsDBNull(8) ? null : r.GetString(8),
+        ValorNuevo = r.IsDBNull(9) ? null : r.GetString(9),
+        Comentario = r.IsDBNull(10) ? null : r.GetString(10),
+        UsuarioNombre = r.GetString(11)
+    };
 
     private static OrdenServicio Leer(SqlDataReader r) => new()
     {
@@ -269,6 +411,9 @@ GROUP BY Estado", conn);
         using var tx = conn.BeginTransaction();
         try
         {
+            if (pago.Monto <= 0 || pago.Monto > o.CostoServicio)
+                throw new ApplicationException("El abono inicial debe ser mayor que cero y no exceder el costo del servicio.");
+
             int ordenId;
             using (var cmd = new SqlCommand(@"
 INSERT INTO OrdenesServicio (DispositivoID, TecnicoID, FechaIngreso, ProblemaReportado,
@@ -277,13 +422,10 @@ VALUES (@DispositivoID, @TecnicoID, GETDATE(), @ProblemaReportado,
         'Pendiente', @CostoServicio, @Observaciones);
 SELECT CAST(SCOPE_IDENTITY() AS INT);", conn, tx))
             {
-                cmd.Parameters.AddWithValue("@DispositivoID", o.DispositivoID);
-                cmd.Parameters.AddWithValue("@TecnicoID", (object?)o.TecnicoID ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("@ProblemaReportado", o.ProblemaReportado);
-                cmd.Parameters.AddWithValue("@CostoServicio", o.CostoServicio);
-                cmd.Parameters.AddWithValue("@Observaciones", (object?)o.Observaciones ?? DBNull.Value);
+                AgregarParametrosOrden(cmd, o);
                 ordenId = (int)cmd.ExecuteScalar();
             }
+            InsertarHistorial(conn, tx, ordenId, "Creacion", null, "Pendiente", null, null, null, "Orden creada con abono inicial");
 
             using (var cmd = new SqlCommand(@"
 INSERT INTO Pagos (OrdenID, FechaPago, Monto, MetodoPago, Observaciones)
@@ -296,6 +438,7 @@ VALUES (@OrdenID, GETDATE(), @Monto, @MetodoPago, @Observaciones);", conn, tx))
                 if (cmd.ExecuteNonQuery() != 1)
                     throw new ApplicationException("No se pudo registrar el pago inicial.");
             }
+            InsertarHistorial(conn, tx, ordenId, "Pago", null, null, "Pago inicial", null, pago.Monto.ToString("F2"), "Abono inicial registrado");
 
             tx.Commit();
             return ordenId;

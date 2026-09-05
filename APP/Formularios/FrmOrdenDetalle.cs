@@ -23,6 +23,7 @@ public partial class FrmOrdenDetalle : Form
     private readonly DateTimePicker dtFechaIngreso = new();
     private readonly DateTimePicker dtFechaFinalizacion = new();
     private readonly DataGridView gridPagos = new();
+    private readonly DataGridView gridHistorial = new();
     private readonly Label lblTotalPagado = new();
     private readonly Label lblSaldo = new();
     private bool _cargando;
@@ -143,14 +144,13 @@ public partial class FrmOrdenDetalle : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 4,
+            RowCount = 3,
             Padding = Padding.Empty,
             Margin = Padding.Empty
         };
         rightLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Título
-        rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); // Grid (se expande)
-        rightLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Total pagado
-        rightLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Saldo
+        rightLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); // Pestañas (se expanden)
+        rightLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); // Totales
         rightPanel.Controls.Add(rightLayout);
 
         var lblPagos = new Label { Text = "Pagos", Font = Estilos.Fuente(10, FontStyle.Bold), AutoSize = true, Margin = new Padding(0, 0, 0, 8) };
@@ -161,7 +161,23 @@ public partial class FrmOrdenDetalle : Form
         gridPagos.Columns.Add(UIHelper.Col("Fecha", "FechaPago", 110));
         gridPagos.Columns.Add(UIHelper.Col("Monto", "Monto", 80));
         gridPagos.Columns.Add(UIHelper.Col("Método", "MetodoPago", 100));
-        rightLayout.Controls.Add(gridPagos, 0, 1);
+
+        UIHelper.ConfigurarGrilla(gridHistorial);
+        gridHistorial.Columns.Add(UIHelper.Col("Fecha", "FechaCambio", 120));
+        gridHistorial.Columns.Add(UIHelper.Col("Tipo", "TipoCambio", 75));
+        gridHistorial.Columns.Add(UIHelper.Col("Campo", "CampoModificado", 110));
+        gridHistorial.Columns.Add(UIHelper.Col("Anterior", "ValorAnterior", 130));
+        gridHistorial.Columns.Add(UIHelper.Col("Nuevo", "ValorNuevo", 130));
+        gridHistorial.Columns.Add(UIHelper.Col("Usuario", "UsuarioNombre", 100));
+
+        var pestañas = new TabControl { Dock = DockStyle.Fill };
+        var pestañaPagos = new TabPage("Pagos") { Padding = new Padding(4) };
+        var pestañaHistorial = new TabPage("Historial") { Padding = new Padding(4) };
+        pestañaPagos.Controls.Add(gridPagos);
+        pestañaHistorial.Controls.Add(gridHistorial);
+        pestañas.TabPages.Add(pestañaPagos);
+        pestañas.TabPages.Add(pestañaHistorial);
+        rightLayout.Controls.Add(pestañas, 0, 1);
 
         var pnlTotales = new FlowLayoutPanel
         {
@@ -173,7 +189,6 @@ public partial class FrmOrdenDetalle : Form
             Margin = new Padding(0, 12, 0, 0)
         };
         rightLayout.Controls.Add(pnlTotales, 0, 2);
-        rightLayout.SetRowSpan(pnlTotales, 2); // Ocupa filas 2 y 3
 
         pnlTotales.Controls.Add(new Label { Text = "Total pagado:", AutoSize = true, Font = Estilos.Fuente(9), ForeColor = Estilos.Terciario });
         lblTotalPagado.Font = Estilos.Fuente(10, FontStyle.Bold);
@@ -253,6 +268,7 @@ public partial class FrmOrdenDetalle : Form
 
                 var pagos = PagoDAL.ObtenerPorOrden(_ordenId);
                 gridPagos.DataSource = pagos;
+                gridHistorial.DataSource = OrdenServicioDAL.ObtenerHistorial(_ordenId);
                 var total = pagos?.Sum(p => p.Monto) ?? 0m;
                 lblTotalPagado.Text = total.ToString("C2");
                 var saldo = o.CostoServicio - total;

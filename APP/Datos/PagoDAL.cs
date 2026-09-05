@@ -110,19 +110,70 @@ INNER JOIN Clientes c ON d.ClienteID = c.ClienteID";
 
     public static int Insertar(Pago p)
     {
+        return RegistrarPagoSeguro(p);
+    }
+
+    /// <summary>Valida el saldo e inserta el pago bloqueando la orden en una sola transacción.</summary>
+    public static int RegistrarPagoSeguro(Pago p)
+    {
         try
         {
             using var conn = Conexion.ObtenerConexion();
             conn.Open();
-            using var cmd = new SqlCommand(@"
+            using var tx = conn.BeginTransaction();
+            try
+            {
+                decimal costo;
+                decimal totalPagado;
+                using (var saldoCmd = new SqlCommand(@"
+SELECT o.CostoServicio, ISNULL(SUM(p.Monto), 0)
+FROM OrdenesServicio o WITH (UPDLOCK, HOLDLOCK)
+LEFT JOIN Pagos p ON p.OrdenID = o.OrdenID
+WHERE o.OrdenID = @OrdenID
+GROUP BY o.CostoServicio", conn, tx))
+                {
+                    saldoCmd.Parameters.AddWithValue("@OrdenID", p.OrdenID);
+                    using var reader = saldoCmd.ExecuteReader();
+                    if (!reader.Read()) throw new ApplicationException("La orden seleccionada no existe.");
+                    costo = reader.GetDecimal(0);
+                    totalPagado = reader.GetDecimal(1);
+                }
+
+                var saldo = costo - totalPagado;
+                if (p.Monto <= 0 || p.Monto > saldo)
+                    throw new ApplicationException($"El pago no puede exceder el saldo pendiente. Saldo disponible: {saldo:C2}.");
+
+                int pagoId;
+                using (var cmd = new SqlCommand(@"
 INSERT INTO Pagos (OrdenID, FechaPago, Monto, MetodoPago, Observaciones)
 VALUES (@OrdenID, GETDATE(), @Monto, @MetodoPago, @Observaciones);
-SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
-            cmd.Parameters.AddWithValue("@OrdenID", p.OrdenID);
-            cmd.Parameters.AddWithValue("@Monto", p.Monto);
-            cmd.Parameters.AddWithValue("@MetodoPago", p.MetodoPago);
-            cmd.Parameters.AddWithValue("@Observaciones", (object?)p.Observaciones ?? DBNull.Value);
-            return (int)cmd.ExecuteScalar();
+SELECT CAST(SCOPE_IDENTITY() AS INT);", conn, tx))
+                {
+                    cmd.Parameters.AddWithValue("@OrdenID", p.OrdenID);
+                    cmd.Parameters.AddWithValue("@Monto", p.Monto);
+                    cmd.Parameters.AddWithValue("@MetodoPago", p.MetodoPago);
+                    cmd.Parameters.AddWithValue("@Observaciones", (object?)p.Observaciones ?? DBNull.Value);
+                    pagoId = (int)cmd.ExecuteScalar();
+                }
+
+                using (var historialCmd = new SqlCommand(@"
+INSERT INTO HistorialOrdenes (OrdenID, UsuarioID, TipoCambio, CampoModificado, ValorNuevo, Comentario)
+VALUES (@OrdenID, @UsuarioID, 'Pago', 'Pago', @ValorNuevo, 'Pago registrado')", conn, tx))
+                {
+                    historialCmd.Parameters.AddWithValue("@OrdenID", p.OrdenID);
+                    historialCmd.Parameters.AddWithValue("@UsuarioID", Sesion.UsuarioID > 0 ? Sesion.UsuarioID : DBNull.Value);
+                    historialCmd.Parameters.AddWithValue("@ValorNuevo", p.Monto.ToString("F2"));
+                    historialCmd.ExecuteNonQuery();
+                }
+
+                tx.Commit();
+                return pagoId;
+            }
+            catch
+            {
+                tx.Rollback();
+                throw;
+            }
         }
         catch (SqlException ex)
         {

@@ -155,20 +155,6 @@ public partial class FrmPagoFormulario : Form
 
         var ordenId = _ordenId ?? Convert.ToInt32(cboOrden.SelectedValue);
 
-        // Validar que el pago no exceda el saldo pendiente
-        var totalPagado = PagoDAL.ObtenerTotalPagado(ordenId);
-        var orden = OrdenServicioDAL.ObtenerPorId(ordenId);
-        if (orden != null)
-        {
-            var saldo = orden.CostoServicio - totalPagado;
-            if (numMonto.Value > saldo)
-            {
-                MessageBox.Show(this, $"El pago no puede exceder el saldo pendiente. Saldo disponible: {saldo:C2}.",
-                    "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-        }
-
         var pago = new Pago
         {
             OrdenID = ordenId,
@@ -179,7 +165,7 @@ public partial class FrmPagoFormulario : Form
 
         var ok = UIHelper.EjecutarSeguro(this, () =>
         {
-            var id = PagoDAL.Insertar(pago);
+            var id = PagoDAL.RegistrarPagoSeguro(pago);
             if (id <= 0) throw new ApplicationException("No se pudo registrar el pago.");
         }, "Pagos");
         if (!ok) return;

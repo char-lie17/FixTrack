@@ -53,7 +53,7 @@ FixTrack_Proyecto/
 
 ## 4. Base de datos
 
-### Tablas (6 en total)
+### Tablas (7 en total)
 | Tabla | Propósito |
 |---|---|
 | `Clientes` | Registro de clientes |
@@ -62,12 +62,14 @@ FixTrack_Proyecto/
 | `OrdenesServicio` | Órdenes de servicio |
 | `Pagos` | Pagos registrados |
 | `Usuarios` | Usuarios del sistema y sus roles |
+| `HistorialOrdenes` | Auditoría de cambios y pagos de las órdenes |
 
 ### Relaciones
-- 5 Foreign Keys definidas.
+- 7 Foreign Keys definidas.
 - `ON DELETE NO ACTION` en Clientes y Dispositivos cuando existen órdenes asociadas.
 - Un técnico puede estar asociado a como máximo un usuario (índice único filtrado).
 - Una orden puede tener múltiples pagos asociados.
+- Los cambios relevantes de una orden se registran en `HistorialOrdenes`.
 
 ### Restricciones de integridad
 - `CK_OrdenesServicio_Costo`: costo del servicio debe ser ≥ 0.
