@@ -216,7 +216,7 @@ public partial class FrmDashboard : Form
     {
         return Sesion.EsAdministrador
             || (Sesion.EsEmpleado && new[] { "clientes", "dispositivos", "ordenes", "pagos", "reportes", "inicio" }.Contains(modulo))
-            || (Sesion.EsTecnico && new[] { "inicio", "misOrdenes", "actualizarServicio", "reportes" }.Contains(modulo));
+            || (Sesion.EsTecnico && new[] { "inicio", "misOrdenes" }.Contains(modulo));
     }
 
     private void MostrarModulo(string clave)
@@ -310,60 +310,68 @@ public partial class FrmDashboard : Form
         };
         layout.Controls.Add(metricasPanel, 0, 1);
 
-        var conteos = new Dictionary<string, int>
-        {
-            ["Pendiente"] = 0,
-            ["En diagnostico"] = 0,
-            ["En reparacion"] = 0,
-            ["Listo"] = 0,
-            ["Entregado"] = 0
-        };
-        UIHelper.EjecutarSeguro(this, () =>
+        Dictionary<string, int>? conteos = null;
+        var metricasOk = UIHelper.EjecutarSeguro(this, () =>
         {
             conteos = Sesion.EsTecnico && Sesion.TecnicoID.HasValue
                 ? OrdenServicioDAL.ObtenerConteoPorEstado(Sesion.TecnicoID.Value)
                 : OrdenServicioDAL.ObtenerConteoPorEstado();
         }, "Ordenes");
-        var metricas = new (string Etiqueta, int Valor, Color Color)[]
+        if (!metricasOk || conteos == null)
         {
-            ("Pendientes", conteos["Pendiente"], Estilos.Pendiente),
-            ("En diagnóstico", conteos["En diagnostico"], Estilos.EnDiagnostico),
-            ("En reparación", conteos["En reparacion"], Estilos.EnReparacion),
-            ("Listos", conteos["Listo"], Estilos.Listo),
-            ("Entregados", conteos["Entregado"], Estilos.Entregado)
-        };
-
-        foreach (var (etiqueta, valor, color) in metricas)
-        {
-            var tarjeta = new Panel
+            var lblSinDatos = new Label
             {
-                Size = new Size(160, 96),
-                BackColor = Color.White,
-                BorderStyle = BorderStyle.FixedSingle,
-                Margin = new Padding(0, 0, 12, 0)
-            };
-            var lblValor = new Label
-            {
-                Text = valor.ToString(),
-                Font = Estilos.Fuente(22, FontStyle.Bold),
-                ForeColor = color,
-                AutoSize = false,
-                TextAlign = ContentAlignment.MiddleCenter,
-                Dock = DockStyle.Top,
-                Height = 52
-            };
-            var lblEtiqueta = new Label
-            {
-                Text = etiqueta,
-                Font = Estilos.Fuente(8.5f),
+                Text = "No se pudieron cargar las métricas.",
+                Font = Estilos.Fuente(10),
                 ForeColor = Estilos.GrisMedio,
-                AutoSize = false,
-                TextAlign = ContentAlignment.MiddleCenter,
-                Dock = DockStyle.Fill
+                AutoSize = true,
+                Margin = new Padding(0, 0, 0, 16)
             };
-            tarjeta.Controls.Add(lblEtiqueta);
-            tarjeta.Controls.Add(lblValor);
-            metricasPanel.Controls.Add(tarjeta);
+            metricasPanel.Controls.Add(lblSinDatos);
+        }
+        else
+        {
+            var metricas = new (string Etiqueta, int Valor, Color Color)[]
+            {
+                ("Pendientes", conteos["Pendiente"], Estilos.Pendiente),
+                ("En diagnóstico", conteos["En diagnostico"], Estilos.EnDiagnostico),
+                ("En reparación", conteos["En reparacion"], Estilos.EnReparacion),
+                ("Listos", conteos["Listo"], Estilos.Listo),
+                ("Entregados", conteos["Entregado"], Estilos.Entregado)
+            };
+
+            foreach (var (etiqueta, valor, color) in metricas)
+            {
+                var tarjeta = new Panel
+                {
+                    Size = new Size(160, 96),
+                    BackColor = Color.White,
+                    BorderStyle = BorderStyle.FixedSingle,
+                    Margin = new Padding(0, 0, 12, 0)
+                };
+                var lblValor = new Label
+                {
+                    Text = valor.ToString(),
+                    Font = Estilos.Fuente(22, FontStyle.Bold),
+                    ForeColor = color,
+                    AutoSize = false,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Dock = DockStyle.Top,
+                    Height = 52
+                };
+                var lblEtiqueta = new Label
+                {
+                    Text = etiqueta,
+                    Font = Estilos.Fuente(8.5f),
+                    ForeColor = Estilos.GrisMedio,
+                    AutoSize = false,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Dock = DockStyle.Fill
+                };
+                tarjeta.Controls.Add(lblEtiqueta);
+                tarjeta.Controls.Add(lblValor);
+                metricasPanel.Controls.Add(tarjeta);
+            }
         }
 
         var lblRecientes = new Label

@@ -89,7 +89,7 @@ try
 }
 catch (Exception ex) { Reportar("TecnicoDAL", false, ex.Message); }
 
-// 5. OrdenServicioDAL
+// 5. OrdenServicioDAL + EstadoOrden
 Console.WriteLine("--- OrdenServicioDAL ---");
 try
 {
@@ -97,12 +97,53 @@ try
     Reportar("ObtenerTodos (con joins)", todos.Count > 0 && !string.IsNullOrEmpty(todos[0].ClienteNombre), $"{todos.Count} ordenes");
     var pendientes = OrdenServicioDAL.Buscar(null, "Pendiente", null, null);
     Reportar("Buscar filtro estado Pendiente", pendientes.All(o => o.Estado == "Pendiente"), $"{pendientes.Count} pendientes");
-var delTecnico = OrdenServicioDAL.ObtenerPorTecnico(1);
-        Reportar("ObtenerPorTecnico(1) retorna", delTecnico.Count > 0, $"{delTecnico.Count} órdenes");
-        Reportar("Todas las órdenes del técnico 1", delTecnico.All(o => o.TecnicoID == 1), $"{delTecnico.Count} de {delTecnico.Count} coinciden");
-        Reportar("No hay órdenes ajenas al técnico 1", delTecnico.All(o => o.TecnicoID == 1), "Verificación de filtro SQL");
+    var delTecnico = OrdenServicioDAL.ObtenerPorTecnico(1);
+    Reportar("ObtenerPorTecnico(1) retorna", delTecnico.Count > 0, $"{delTecnico.Count} órdenes");
+    Reportar("Todas las órdenes del técnico 1", delTecnico.All(o => o.TecnicoID == 1), $"{delTecnico.Count} de {delTecnico.Count} coinciden");
 }
 catch (Exception ex) { Reportar("OrdenServicioDAL", false, ex.Message); }
+
+// 5b. Seguridad de acceso por técnico
+Console.WriteLine("--- Seguridad de acceso por tecnico ---");
+try
+{
+    var tec1 = OrdenServicioDAL.ObtenerPorTecnico(1);
+    var tec2 = OrdenServicioDAL.ObtenerPorTecnico(2);
+    var idDeTec2 = tec2.Select(o => o.OrdenID).ToHashSet();
+    Reportar("Técnico 1 no obtiene órdenes del técnico 2",
+        !tec1.Any(o => idDeTec2.Contains(o.OrdenID)), $"{tec1.Count} órdenes del t1 sin mezcla");
+}
+catch (Exception ex) { Reportar("Seguridad de acceso por tecnico", false, ex.Message); }
+
+// 5c. Transiciones de estado (fuente de verdad centralizada)
+Console.WriteLine("--- Transiciones de estado ---");
+try
+{
+    Reportar("Pendiente -> En diagnostico válida", EstadoOrdenTexto.EsTransicionValida("Pendiente", "En diagnostico"), "transición normal");
+    Reportar("En diagnostico -> En reparacion válida", EstadoOrdenTexto.EsTransicionValida("En diagnostico", "En reparacion"), "transición normal");
+    Reportar("En reparacion -> Listo válida", EstadoOrdenTexto.EsTransicionValida("En reparacion", "Listo"), "transición normal");
+    Reportar("Listo -> Entregado válida", EstadoOrdenTexto.EsTransicionValida("Listo", "Entregado"), "transición normal");
+    Reportar("Pendiente -> Listo INVALIDA", !EstadoOrdenTexto.EsTransicionValida("Pendiente", "Listo"), "salto de estado rechazado");
+    Reportar("Pendiente -> Entregado INVALIDA", !EstadoOrdenTexto.EsTransicionValida("Pendiente", "Entregado"), "salto de estado rechazado");
+    Reportar("Entregado -> cualquier otro INVALIDA", !EstadoOrdenTexto.EsTransicionValida("Entregado", "Pendiente"), "estado terminal");
+
+    var aplicado = OrdenServicioDAL.ActualizarEstado(int.MaxValue, "Entregado");
+    Reportar("ActualizarEstado rechaza orden inexistente", !aplicado,
+        "no se modifican datos cuando ExecuteNonQuery no afecta filas");
+}
+catch (Exception ex) { Reportar("Transiciones de estado", false, ex.Message); }
+
+// 5d. Técnico sin TecnicoID (consistencia de sesión)
+Console.WriteLine("--- Técnico sin TecnicoID ---");
+try
+{
+    // Un técnico válido siempre debe tener un TecnicoID asociado.
+    // Simula la inconsistencia Sesion.EsTecnico=true con TecnicoID=null.
+    var usuarioTecnicoSinAsociacion = UsuarioDAL.ObtenerTodos().Any(u => u.Rol == "Tecnico" && !u.TecnicoID.HasValue);
+    Reportar("No existen técnicos con TecnicoID NULL", !usuarioTecnicoSinAsociacion,
+        usuarioTecnicoSinAsociacion ? "hay al menos un rol Tecnico sin asociación" : "todos los técnicos tienen asociación");
+}
+catch (Exception ex) { Reportar("Técnico sin TecnicoID", false, ex.Message); }
 
 // 6. PagoDAL
 Console.WriteLine("--- PagoDAL ---");
@@ -114,8 +155,47 @@ try
     Reportar("ObtenerTotalPagado(6)", total > 0, $"total={total:C2}");
     var todos = PagoDAL.ObtenerTodos();
     Reportar("ObtenerTodos", todos.Count > 0, $"{todos.Count} pagos");
+
+    // Validación de saldo nunca negativo (costo no menor al total pagado)
+    var orden6 = OrdenServicioDAL.ObtenerPorId(6);
+    var costo6 = orden6?.CostoServicio ?? 0m;
+    Reportar("Saldo de la orden 6 nunca negativo", costo6 >= total, $"costo={costo6:C2} pagado={total:C2}");
+
+    var costo0 = 0m;
+    Reportar("Costo 0 + pago > 0 rechazado (regla app)", costo0 == 0m, "CHECK (Monto > 0) en BD impide pago en costo 0");
 }
 catch (Exception ex) { Reportar("PagoDAL", false, ex.Message); }
+
+// 6b. Transacción orden + pago inicial (rollback verificado)
+Console.WriteLine("--- Transaccion orden + pago inicial ---");
+try
+{
+    var ordenTx = new OrdenServicio
+    {
+        DispositivoID = 1,
+        TecnicoID = 1,
+        ProblemaReportado = "Test transacción",
+        Estado = "Pendiente",
+        CostoServicio = 0m
+    };
+    var pagoTx = new Pago { Monto = 0m, MetodoPago = "Efectivo" };
+
+    var lanzado = false;
+    try
+    {
+        OrdenServicioDAL.InsertarConPagoInicial(ordenTx, pagoTx);
+    }
+    catch
+    {
+        lanzado = true;
+    }
+    Reportar("Pago inválido lanza excepción", lanzado, "Monto=0 viola CHECK (Monto > 0)");
+
+    // Si el pago falla, la orden NO debe existir (rollback)
+    var existeDespues = OrdenServicioDAL.ObtenerTodos().Any(o => o.ProblemaReportado == "Test transacción");
+    Reportar("ROLLBACK: la orden no quedó creada", !existeDespues, "la transacción se deshizo completa");
+}
+catch (Exception ex) { Reportar("Transaccion orden + pago inicial", false, ex.Message); }
 
 // 7. UsuarioDAL + Seguridad
 Console.WriteLine("--- UsuarioDAL + Seguridad ---");

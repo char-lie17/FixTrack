@@ -18,6 +18,7 @@ dist/
 project.lock.json
 project.fragment.lock.json
 artifacts/
+graphify-out/
 *.nuget.props
 *.nuget.targets
 

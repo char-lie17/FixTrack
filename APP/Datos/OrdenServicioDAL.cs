@@ -43,7 +43,7 @@ LEFT JOIN Tecnicos t ON o.TecnicoID = t.TecnicoID";
         WHEN 'Entregado' THEN 5
         ELSE 6 END";
 
-public static List<OrdenServicio> Buscar(string? texto, string? estado, DateTime? desde, DateTime? hasta, int? tecnicoId = null)
+    public static List<OrdenServicio> Buscar(string? texto, string? estado, DateTime? desde, DateTime? hasta, int? tecnicoId = null)
     {
         var textoLimpio = texto?.Trim();
         var esId = int.TryParse(textoLimpio, out var idBuscado);
@@ -253,7 +253,7 @@ GROUP BY Estado", conn);
         while (reader.Read())
         {
             var valor = reader.GetString(0);
-if (resultado.ContainsKey(valor)) resultado[valor] = reader.GetInt32(1);
+            if (resultado.ContainsKey(valor)) resultado[valor] = reader.GetInt32(1);
         }
         return resultado;
     }
@@ -293,7 +293,8 @@ VALUES (@OrdenID, GETDATE(), @Monto, @MetodoPago, @Observaciones);", conn, tx))
                 cmd.Parameters.AddWithValue("@Monto", pago.Monto);
                 cmd.Parameters.AddWithValue("@MetodoPago", pago.MetodoPago);
                 cmd.Parameters.AddWithValue("@Observaciones", (object?)pago.Observaciones ?? DBNull.Value);
-                cmd.ExecuteNonQuery();
+                if (cmd.ExecuteNonQuery() != 1)
+                    throw new ApplicationException("No se pudo registrar el pago inicial.");
             }
 
             tx.Commit();
@@ -302,7 +303,7 @@ VALUES (@OrdenID, GETDATE(), @Monto, @MetodoPago, @Observaciones);", conn, tx))
         catch
         {
             tx.Rollback();
-throw;
+            throw;
         }
     }
 }

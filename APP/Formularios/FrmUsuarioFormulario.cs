@@ -197,7 +197,8 @@ public partial class FrmUsuarioFormulario : Form
         var nombreUsuario = txtNombreUsuario.Text.Trim();
         var password = txtPassword.Text;
         var rol = cboRol.SelectedItem?.ToString() ?? string.Empty;
-        var tecnicoId = cboTecnico.SelectedValue as int?;
+        var seleccion = cboTecnico.SelectedValue;
+        int? tecnicoId = seleccion == null || seleccion is DBNull ? null : Convert.ToInt32(seleccion);
 
         if (string.IsNullOrWhiteSpace(nombreUsuario))
         {

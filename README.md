@@ -10,7 +10,7 @@ Aplicación de escritorio desarrollada en **C# .NET 10.0** con **Windows Forms**
 
 **Versión actual:** `v1.0-snapshot` (heredado de Henry Creel)
 
-⚠️ **Nota importante:** Este commit inicial (`98ef50f`) preserva el estado tal cual fue entregado. Contiene bugs conocidos que serán corregidos en commits posteriores. Ver sección [Bugs Conocidos](#-bugs-conocidos).
+**Nota:** El snapshot inicial (`98ef50f`) se conserva como referencia. Las correcciones posteriores están documentadas en `BUGS_Y_CORRECCIONES.md`.
 
 ---
 
@@ -284,20 +284,20 @@ Ejecuta `FrmTestConexion` (formulario incluido) para probar la conexión a la ba
 
 ## 🛣️ Roadmap
 
-### Próximas correcciones (commit siguiente)
+### Correcciones completadas
 
-- [x] ~~Subir snapshot inicial~~ (este commit)
-- [ ] **Arreglar FrmReportes:** Agregar `AutoGenerateColumns = true` o definir columnas manualmente
-- [ ] **Mejorar layout:** Usar `Dock = Fill` con `FlowLayoutPanel.AutoSize` correcto
-- [ ] **Agregar documentación inline:** Comentarios XML en clases públicas
-- [ ] **Tests unitarios:** Proyecto de test para validar lógica de negocio
+- [x] ~~Subir snapshot inicial~~
+- [x] **Arreglar FrmReportes:** columnas automáticas para los reportes variables
+- [x] **Corregir layout:** orden de docking y barras responsivas
+- [x] **Corregir flujo de órdenes:** fechas, estados y resultados de DAL
+- [x] **Ampliar smoke tests:** filtros, transiciones, pagos y rollback
 
-### Futuras mejoras
+### Próximas mejoras
 
-- [ ] Implementar Entity Framework Core (reemplazar ADO.NET puro)
-- [ ] Agregar campo `Estado` a tabla `Dispositivos` (baja lógica)
-- [ ] Exportar reportes a PDF (actualmente solo CSV)
-- [ ] Notificaciones/alertas para órdenes antiguas
+- [ ] Añadir pruebas automatizadas aisladas para reglas de negocio sin SQL Server
+- [ ] Evaluar una operación transaccional para pagos concurrentes
+- [ ] Documentar la decisión pendiente sobre `Dispositivos.Estado`
+
 - [ ] Panel de configuración para cambiar servidor SQL desde la UI
 
 ---

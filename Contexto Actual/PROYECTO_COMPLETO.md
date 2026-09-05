@@ -262,7 +262,7 @@ Cualquier transición fuera de esta matriz es **rechazada** por validación en F
 ### 4.8 FrmOrdenes
 - Grid: No, Fecha ingreso, Cliente, Dispositivo, Técnico, Estado (coloreado), Costo
 - Filtros: Texto libre (orden, cliente, dispositivo), Estado, Fecha Desde/Hasta
-- **Para técnico** (`soloTecnicoActual=true`): `btnNueva` oculto, grid filtrado por técnico en memoria
+- **Para técnico** (`soloTecnicoActual=true`): `btnNueva` oculto, grid filtrado por técnico directamente en SQL
 - `Grid_CellFormatting`: colores de estado
 - Doble clic abre FrmOrdenDetalle
 
@@ -534,9 +534,9 @@ Clase estática con propiedades:
 - **Problema:** `ReportesDAL.ObtenerServiciosCompletados` usaba `WHERE Estado IN ('Listo', 'Entregado')`
 - **Corrección:** Se cambió a `WHERE Estado = 'Entregado'` según 09_identidad_visual.md y Rules.md
 
-### 7.15 Corrección 8.2 — Stored Procedure Inexistente
-- **Problema:** `ReportesDAL.ObtenerOrdenesPorEstado` llamaba a `sp_ReporteOrdenesPorEstado` que no existe en BD
-- **Corrección:** Se reemplazó con query SQL directa usando el método `Ejecutar()` auxiliar
+### 7.15 Corrección 8.2 — Stored Procedure de reportes
+- **Problema:** `ReportesDAL.ObtenerOrdenesPorEstado` no utilizaba el procedimiento almacenado definido en `BD/FixTrack_BD.sql`
+- **Corrección:** Se ejecuta `sp_ReporteOrdenesPorEstado` con `CommandType.StoredProcedure` y los parámetros de fecha
 
 ### 7.16 Corrección 11.1 — Título del Dashboard
 - **Problema:** Título tenía `[build menu-fix-v3]` (texto de desarrollo)
@@ -551,16 +551,16 @@ Clase estática con propiedades:
 - **Corrección:** Se agregó `if (numCosto.Value < PagoDAL.ObtenerTotalPagado(_ordenId))` → mensaje de error y retorno
 
 ### 7.19 Corrección Fase D — FechaFinalizacion persistida en Guardar
-- **Problema:** `BtnGuardar_Click` no enviaba `dtFechaFinalizacion.Value` a `ActualizarDetalle()`, perdiendo la fecha de finalización al guardar
-- **Corrección:** Se agregó `o.FechaFinalizacion = dtFechaFinalizacion.Enabled ? dtFechaFinalizacion.Value : (DateTime?)null;` antes del `ActualizarDetalle`
+- **Problema:** `BtnGuardar_Click` podía enviar `null` al guardar desde un técnico, perdiendo una fecha existente
+- **Corrección:** Si el campo está habilitado se usa el valor de la interfaz; si está deshabilitado se conserva el valor original leído desde la BD
 
 ### 7.20 Corrección Fase C — Filtrado SQL real para técnico en FrmOrdenes
 - **Problema:** `FrmOrdenes.CargarDatos()` hacía filtrado in-memory con `.Where(o => o.TecnicoID == Sesion.TecnicoID.Value)` después de `Buscar()`
 - **Corrección:** Se agregó parámetro opcional `int? tecnicoId = null` a `OrdenServicioDAL.Buscar()` con `AND o.TecnicoID = @TecnicoID` en SQL. FrmOrdenes ahora pasa `Sesion.TecnicoID.Value` directamente al DAL
 
 ### 7.21 Corrección Fase H — Métricas del Dashboard con error handling
-- **Problema:** `CargarInicio()` llamaba `OrdenServicioDAL.ObtenerConteoPorEstado()` sin protección de errores
-- **Corrección:** Se inicializa `conteos` con valores por defecto (0) y se ejecuta dentro de `UIHelper.EjecutarSeguro`. Si SQL falla, se muestran 0 en lugar de crashing
+- **Problema:** `CargarInicio()` podía dejar métricas en cero cuando fallaba SQL
+- **Corrección:** La carga se ejecuta dentro de `UIHelper.EjecutarSeguro`; si falla, se muestra "No se pudieron cargar las métricas" en lugar de presentar ceros como datos reales
 
 ### 7.22 Corrección Fase A — Abono no permitido cuando costo = 0
 - **Problema:** `FrmOrdenNueva` solo validaba `abono > costo` pero no `costo == 0 && abono > 0`
@@ -574,14 +574,24 @@ Clase estática con propiedades:
 
 ---
 
+### 7.24 Corrección Fase J — Resultados DAL y seguridad de transiciones
+- **Problema:** La UI podía continuar aunque `ActualizarEstado()` o `ActualizarDetalle()` no modificaran filas; además, el formulario contenía una ruta SQL directa
+- **Corrección:** La DAL valida transiciones y devuelve el resultado de `ExecuteNonQuery()`. La UI reacciona a ese resultado y todo el SQL de órdenes permanece en `OrdenServicioDAL`
+
+### 7.25 Corrección Fase J — Smoke tests sin mutaciones destructivas
+- **Problema:** El `TestRunner` modificaba la orden real `OrdenID = 1` durante la prueba de transición
+- **Corrección:** La prueba de resultado falso usa una orden inexistente (`int.MaxValue`) y la prueba transaccional conserva la verificación de rollback
+
+---
+
 ## 8. ARCHIVOS MODIFICADOS EN REPARACIÓN
 
 | Archivo | Cambios |
 |---------|---------|
 | `APP\Datos\OrdenServicioDAL.cs` | Agregado `ObtenerConteoPorEstado(int tecnicoId)` |
-| `APP\Datos\ReportesDAL.cs` | `ObtenerServiciosCompletados` → solo `Entregado`; `ObtenerOrdenesPorEstado` → query SQL directa |
+| `APP\Datos\ReportesDAL.cs` | `ObtenerServiciosCompletados` → solo `Entregado`; `ObtenerOrdenesPorEstado` → `sp_ReporteOrdenesPorEstado` |
 | `APP\Formularios\FrmDashboard.cs` | Menú técnico sin Reportes; métricas filtradas; error handling en grid; título corregido |
-| `APP\Formularios\FrmOrdenDetalle.cs` | Diagnóstico, TrabajoRealizado, Fechas agregados; validación de transición; costo habilitado; `_estadoActual` para rollback; `using Microsoft.Data.SqlClient` |
+| `APP\Formularios\FrmOrdenDetalle.cs` | Diagnóstico, TrabajoRealizado, fechas, validación centralizada de transición y preservación de `FechaFinalizacion` |
 | `APP\Formularios\FrmOrdenNueva.cs` | Validación de abono ≤ costo |
 | `APP\Formularios\FrmPagoFormulario.cs` | Validación de pago ≤ saldo |
 | `APP\Formularios\FrmUsuarioFormulario.cs` | CargarTecnicos incluye técnico inactivo asociado |
@@ -605,7 +615,7 @@ Estos conflictos fueron identificados en Rules.md §8 y documentados aquí:
 
 1. **Dispositivos sin Estado:** Rules.md menciona baja lógica para dispositivos pero el esquema BD no tiene campo Estado. No se modificó la BD.
 2. **Prefijos alfanuméricos:** Los mockups usan C-, D-, T- pero la BD usa INT IDENTITY. No se implementó prefijo.
-3. **Filtro de técnico en FrmOrdenes:** El filtrado de órdenes propias se hace en memoria (`Where(o => o.TecnicoID == ...)`) para la vista "Mis órdenes", no en SQL directo. Esto funciona correctamente para conjuntos pequeños pero podría optimizarse.
+3. **Concurrencia de pagos:** La validación de saldo y el insert de un pago individual ocurren en operaciones separadas; una operación transaccional adicional sería necesaria para blindar pagos simultáneos.
 4. **ProblemaReportado no se actualiza en ActualizarDetalle:** `ActualizarDetalle()` no incluye `ProblemaReportado` en el SQL UPDATE, pero se envía el objeto completo (que tiene el valor original del SELECT). Funcionalidad correcta pero técnicamente redundante.
 
 ---
@@ -643,7 +653,7 @@ Estos conflictos fueron identificados en Rules.md §8 y documentados aquí:
 3. **Implementar prefijos de ID visuales:** Si se decide alinear con mockups
 4. **Agregar tests unitarios:** Crear proyecto de test para validar lógica de transiciones, validaciones de pago, etc.
 5. **Agregar exportación a PDF:** Si se decide que CSV no es suficiente para reportes visuales
-6. **Implementar `ReportesDAL.ObtenerOrdenesPorEstado` con stored procedure:** Si se decide que debe existir `sp_ReporteOrdenesPorEstado` en BD
+6. **Pruebas unitarias aisladas:** Crear un proyecto de pruebas para reglas de transición y validaciones sin depender de SQL Server
 
 ---
 

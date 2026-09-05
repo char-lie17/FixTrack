@@ -10,12 +10,7 @@ public static class ReportesDAL
     {
         try
         {
-            return Ejecutar(@"
-SELECT o.Estado, COUNT(*) AS Cantidad, SUM(o.CostoServicio) AS Subtotal
-FROM OrdenesServicio o
-WHERE o.FechaIngreso >= @Desde AND o.FechaIngreso < DATEADD(DAY, 1, @Hasta)
-GROUP BY o.Estado
-ORDER BY o.Estado", desde, hasta);
+            return EjecutarProcedimiento("sp_ReporteOrdenesPorEstado", desde, hasta);
         }
         catch (SqlException ex)
         {
@@ -44,7 +39,7 @@ ORDER BY Tecnico", desde, hasta);
         }
     }
 
-    /// <summary>Reporte 3: servicios completados (Listo o Entregado) en el rango.</summary>
+    /// <summary>Reporte 3: servicios entregados en el rango.</summary>
     public static DataTable ObtenerServiciosCompletados(DateTime desde, DateTime hasta)
     {
         try
@@ -88,6 +83,22 @@ ORDER BY MetodoPago", desde, hasta);
         using var conn = Conexion.ObtenerConexion();
         conn.Open();
         using var cmd = new SqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("@Desde", desde.Date);
+        cmd.Parameters.AddWithValue("@Hasta", hasta.Date);
+        using var adapter = new SqlDataAdapter(cmd);
+        var tabla = new DataTable();
+        adapter.Fill(tabla);
+        return tabla;
+    }
+
+    private static DataTable EjecutarProcedimiento(string nombre, DateTime desde, DateTime hasta)
+    {
+        using var conn = Conexion.ObtenerConexion();
+        conn.Open();
+        using var cmd = new SqlCommand(nombre, conn)
+        {
+            CommandType = CommandType.StoredProcedure
+        };
         cmd.Parameters.AddWithValue("@Desde", desde.Date);
         cmd.Parameters.AddWithValue("@Hasta", hasta.Date);
         using var adapter = new SqlDataAdapter(cmd);

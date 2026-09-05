@@ -184,6 +184,12 @@ public partial class FrmLogin : Form
                 return;
             }
 
+            if (u.Rol == "Tecnico" && !u.TecnicoID.HasValue)
+            {
+                lblMensaje.Text = "Su usuario no está asociado a un técnico. Contacte al administrador.";
+                return;
+            }
+
             Sesion.UsuarioID = u.UsuarioID;
             Sesion.NombreUsuario = u.NombreUsuario;
             Sesion.Rol = u.Rol;
