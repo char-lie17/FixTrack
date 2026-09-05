@@ -153,19 +153,39 @@ WHERE OrdenID = @OrdenID", conn);
     }
 
     /// <summary>
-    /// Cambia el estado de la orden. Al pasar a 'Listo' o 'Entregado' se registra
-    /// la FechaFinalizacion automáticamente si aún no existe.
+    /// Obtiene el estado actual de una orden (usado para validar la transición antes de escribir).
+    /// </summary>
+    public static string? ObtenerEstadoActual(int id)
+    {
+        using var conn = Conexion.ObtenerConexion();
+        conn.Open();
+        using var cmd = new SqlCommand("SELECT Estado FROM OrdenesServicio WHERE OrdenID = @OrdenID", conn);
+        cmd.Parameters.AddWithValue("@OrdenID", id);
+        var resultado = cmd.ExecuteScalar();
+        return resultado == DBNull.Value || resultado == null ? null : (string)resultado;
+    }
+
+    /// <summary>
+    /// Cambia el estado de la orden validando la transición contra el flujo real.
+    /// Al pasar a 'Listo' o 'Entregado' se registra la FechaFinalizacion si aún no existe.
+    /// Devuelve false si la orden no existe o si la transición no es válida.
     /// </summary>
     public static bool ActualizarEstado(int id, string nuevoEstado)
     {
+        var estadoActual = ObtenerEstadoActual(id);
+        if (estadoActual == null || !EstadoOrdenTexto.EsTransicionValida(estadoActual, nuevoEstado))
+            return false;
+
         using var conn = Conexion.ObtenerConexion();
         conn.Open();
         using var cmd = new SqlCommand(@"
 UPDATE OrdenesServicio SET Estado = @Estado,
     FechaFinalizacion = CASE
         WHEN @Estado IN ('Listo', 'Entregado') AND FechaFinalizacion IS NULL THEN GETDATE()
+        WHEN @Estado NOT IN ('Listo', 'Entregado') THEN NULL
         ELSE FechaFinalizacion END
-WHERE OrdenID = @OrdenID", conn);
+WHERE OrdenID = @OrdenID AND Estado = @EstadoActual", conn);
+        cmd.Parameters.AddWithValue("@EstadoActual", estadoActual);
         cmd.Parameters.AddWithValue("@Estado", nuevoEstado);
         cmd.Parameters.AddWithValue("@OrdenID", id);
         return cmd.ExecuteNonQuery() > 0;

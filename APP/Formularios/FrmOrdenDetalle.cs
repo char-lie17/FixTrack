@@ -4,7 +4,6 @@ using System.Linq;
 using System.Windows.Forms;
 using FixTrack.Datos;
 using FixTrack.Modelos;
-using Microsoft.Data.SqlClient;
 
 namespace FixTrack.Formularios;
 
@@ -31,6 +30,13 @@ public partial class FrmOrdenDetalle : Form
 
     public FrmOrdenDetalle(int ordenId)
     {
+        if (Sesion.EsTecnico && !Sesion.TecnicoID.HasValue)
+        {
+            MessageBox.Show("Su usuario no está asociado a un técnico. Contacte al administrador.", "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            Close();
+            return;
+        }
+
         if (Sesion.EsTecnico && Sesion.TecnicoID.HasValue)
         {
             var orden = OrdenServicioDAL.ObtenerPorId(ordenId);
@@ -285,17 +291,8 @@ public partial class FrmOrdenDetalle : Form
             return;
         }
 
-        // Validar transiciones válidas
-        var transicionesValidas = new Dictionary<string, string[]>
-        {
-            ["Pendiente"] = new[] { "En diagnostico" },
-            ["En diagnostico"] = new[] { "En reparacion" },
-            ["En reparacion"] = new[] { "Listo" },
-            ["Listo"] = new[] { "Entregado" },
-            ["Entregado"] = new string[0]
-        };
-        if (!transicionesValidas.ContainsKey(_estadoActual) ||
-            !transicionesValidas[_estadoActual].Contains(nuevoEstado))
+        // Validar transiciones válidas (fuente de verdad centralizada)
+        if (!EstadoOrdenTexto.EsTransicionValida(_estadoActual, nuevoEstado))
         {
             MessageBox.Show($"La transición de '{_estadoActual}' a '{nuevoEstado}' no es válida.",
                 "Transición inválida", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -311,28 +308,14 @@ public partial class FrmOrdenDetalle : Form
             return;
         }
 
-        // Actualizar FechaFinalizacion
-        if (UIHelper.EjecutarSeguro(this, () =>
+        // Actualizar estado. Si la DAL no modifica filas, se revierte la selección.
+        var actualizado = UIHelper.EjecutarSeguro(this, () =>
+            OrdenServicioDAL.ActualizarEstado(_ordenId, nuevoEstado), "Ordenes");
+        if (!actualizado)
         {
-            if (new[] { "Listo", "Entregado" }.Contains(nuevoEstado))
-            {
-                OrdenServicioDAL.ActualizarEstado(_ordenId, nuevoEstado);
-            }
-            else if (_estadoActual == "Listo" || _estadoActual == "Entregado")
-            {
-                using var conn = Conexion.ObtenerConexion();
-                conn.Open();
-                using var cmd = new SqlCommand(
-                    "UPDATE OrdenesServicio SET FechaFinalizacion = NULL, Estado = @Estado WHERE OrdenID = @OrdenID", conn);
-                cmd.Parameters.AddWithValue("@Estado", nuevoEstado);
-                cmd.Parameters.AddWithValue("@OrdenID", _ordenId);
-                cmd.ExecuteNonQuery();
-            }
-            else
-            {
-                OrdenServicioDAL.ActualizarEstado(_ordenId, nuevoEstado);
-            }
-        }, "Ordenes"))
+            SeleccionarEstado(_estadoActual);
+            return;
+        }
         _estadoActual = nuevoEstado;
     }
 
@@ -344,9 +327,21 @@ public partial class FrmOrdenDetalle : Form
 
     private void BtnGuardar_Click(object? sender, EventArgs e)
     {
-        var o = OrdenServicioDAL.ObtenerPorId(_ordenId);
-        if (o == null) return;
-        var totalPagado = PagoDAL.ObtenerTotalPagado(_ordenId);
+        OrdenServicio? o = null;
+        decimal totalPagado = 0m;
+
+        UIHelper.EjecutarSeguro(this, () =>
+        {
+            o = OrdenServicioDAL.ObtenerPorId(_ordenId);
+            if (o != null) totalPagado = PagoDAL.ObtenerTotalPagado(_ordenId);
+        }, "Ordenes");
+
+        if (o == null)
+        {
+            MessageBox.Show(this, "La orden no existe.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+
         if (numCosto.Value < totalPagado)
         {
             MessageBox.Show(this, $"El costo no puede ser menor al total pagado ({totalPagado:C2}).",
@@ -358,8 +353,18 @@ public partial class FrmOrdenDetalle : Form
         o.TrabajoRealizado = string.IsNullOrWhiteSpace(txtTrabajoRealizado.Text) ? null : txtTrabajoRealizado.Text.Trim();
         o.Observaciones = string.IsNullOrWhiteSpace(txtObservaciones.Text) ? null : txtObservaciones.Text.Trim();
         o.CostoServicio = numCosto.Value;
-        o.FechaFinalizacion = dtFechaFinalizacion.Enabled ? dtFechaFinalizacion.Value : (DateTime?)null;
-        if (UIHelper.EjecutarSeguro(this, () => OrdenServicioDAL.ActualizarDetalle(o), "Ordenes"))
+
+        // La FechaFinalizacion es editable solo para Administrador/Empleado. Cuando el campo está
+        // deshabilitado (p. ej. técnico) se conserva el valor original de BD para no borrar datos.
+        if (dtFechaFinalizacion.Enabled)
+        {
+            o.FechaFinalizacion = dtFechaFinalizacion.Value;
+        }
+
+        var actualizado = UIHelper.EjecutarSeguro(this, () => OrdenServicioDAL.ActualizarDetalle(o), "Ordenes");
+        if (actualizado)
             MessageBox.Show("Orden actualizada.", "Ordenes", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        else
+            MessageBox.Show(this, "No se pudo actualizar la orden.", "Ordenes", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 }

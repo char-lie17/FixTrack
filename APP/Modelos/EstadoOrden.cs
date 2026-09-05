@@ -65,6 +65,34 @@ public static class EstadoOrdenTexto
     /// </summary>
     public static IReadOnlyList<EstadoItem> ItemsParaCombo =>
         ValoresBD.Zip(Etiquetas, (valor, etiqueta) => new EstadoItem(valor, etiqueta)).ToArray();
+
+    /// <summary>
+    /// Transiciones válidas entre estados (flujo real de una orden de servicio).
+    /// Centralizadas aquí para que tanto la UI como la DAL validen contra la misma
+    /// fuente de verdad (evita protecciones que solo existen en la interfaz).
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string[]> TransicionesValidas =
+        new Dictionary<string, string[]>
+        {
+            ["Pendiente"] = new[] { "En diagnostico" },
+            ["En diagnostico"] = new[] { "En reparacion" },
+            ["En reparacion"] = new[] { "Listo" },
+            ["Listo"] = new[] { "Entregado" },
+            ["Entregado"] = new string[0]
+        };
+
+    /// <summary>Indica si la transición de un estado a otro es válida según el flujo de la orden.</summary>
+    public static bool EsTransicionValida(string estadoActual, string nuevoEstado)
+    {
+        if (string.IsNullOrWhiteSpace(estadoActual) || string.IsNullOrWhiteSpace(nuevoEstado))
+            return false;
+        return TransicionesValidas.TryGetValue(estadoActual, out var permitidos)
+               && permitidos.Contains(nuevoEstado);
+    }
+
+    /// <summary>Estados que registran/requieren FechaFinalizacion al alcanzarse.</summary>
+    public static bool EsEstadoFinal(string estado) =>
+        estado == "Listo" || estado == "Entregado";
 }
 
 /// <summary>Par (valor de BD, etiqueta visible) para usar como Item de un ComboBox.
