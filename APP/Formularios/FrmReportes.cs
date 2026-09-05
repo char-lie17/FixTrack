@@ -38,7 +38,17 @@ public partial class FrmReportes : Form
     {
         // 1. Grilla
         grid.Dock = DockStyle.Fill;
-        UIHelper.ConfigurarGrilla(grid);
+        grid.ReadOnly = true;
+        grid.AllowUserToAddRows = false;
+        grid.AllowUserToDeleteRows = false;
+        grid.AllowUserToResizeRows = false;
+        grid.AutoGenerateColumns = true;
+        grid.RowHeadersVisible = false;
+        grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+        grid.MultiSelect = false;
+        grid.BackgroundColor = Color.White;
+        grid.BorderStyle = BorderStyle.None;
+        grid.Font = Estilos.Fuente(9);
 
         // 2. Barra de controles (dos filas en TableLayoutPanel)
         var barra = new Panel { Dock = DockStyle.Top, Height = 110, BackColor = Color.White, Padding = new Padding(12, 6, 12, 6) };
