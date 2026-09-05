@@ -312,7 +312,7 @@ Este proyecto es de código abierto para fines educativos. TecnoFix Solutions es
 - **Desarrollo inicial:** Henry Creel
 - **Revisión y documentación:** Carlos Castillo (char-lie17)
 - **Empresa ficticia:** TecnoFix Solutions
-- **Contexto académico:** Proyecto de Programación Orientada a Objetos
+- **Contexto académico:** Proyecto de Programación de Aplicaciones de Escritorio
 
 ---
 
