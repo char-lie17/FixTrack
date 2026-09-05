@@ -26,7 +26,6 @@ public partial class FrmPagoDetalle : Form
 
         var header = new Panel { Dock = DockStyle.Top, Height = 56, BackColor = Estilos.Primario };
         header.Controls.Add(new Label { Text = Text, Font = Estilos.Fuente(12, FontStyle.Bold), ForeColor = Color.White, AutoSize = true, Location = new Point(16, 17) });
-        Controls.Add(header);
 
         // Panel de botones inferior
         var bottomPanel = new Panel { Dock = DockStyle.Bottom, Height = 50, BackColor = Color.White, Padding = new Padding(0, 8, 16, 8) };
@@ -34,11 +33,16 @@ public partial class FrmPagoDetalle : Form
         Estilos.BotonPrincipal(btnCerrar);
         btnCerrar.Click += (_, _) => Close();
         bottomPanel.Controls.Add(btnCerrar);
-        Controls.Add(bottomPanel);
 
         grid.Dock = DockStyle.Fill;
         UIHelper.ConfigurarGrilla(grid);
+
+        // Orden correcto: grid (Fill) PRIMERO, luego los paneles con dock (Top/Bottom).
+        // En WinForms el último control agregado queda al frente y se dockeriza primero,
+        // por lo que un Dock=Fill agregado al final cubriría header y bottomPanel.
         Controls.Add(grid);
+        Controls.Add(header);
+        Controls.Add(bottomPanel);
 
         Cargar(pagoId);
     }

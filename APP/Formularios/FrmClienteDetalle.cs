@@ -91,7 +91,6 @@ public FrmClienteDetalle(int clienteId)
                 AutoSize = true,
                 ForeColor = Estilos.Terciario
             });
-            Controls.Add(info);
 
             // Label dispositivos
             var lblDisp = new Label
@@ -103,7 +102,6 @@ public FrmClienteDetalle(int clienteId)
                 Dock = DockStyle.Top,
                 Padding = new Padding(16, 12, 0, 0)
             };
-            Controls.Add(lblDisp);
 
             // Grid
             grid.Dock = DockStyle.Fill;
@@ -131,7 +129,13 @@ public FrmClienteDetalle(int clienteId)
             {
                 grid.DataSource = DispositivoDAL.ObtenerPorCliente(_clienteId);
             }
+
+            // Orden correcto: grid (Fill) PRIMERO, luego lblDisp e info (Top).
+            // En WinForms el último control agregado queda al frente y se dockeriza primero,
+            // por lo que un Dock=Fill agregado al final cubriría la info y la etiqueta.
             Controls.Add(grid);
+            Controls.Add(lblDisp);
+            Controls.Add(info);
         }, "Clientes");
     }
 }

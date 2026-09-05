@@ -157,10 +157,12 @@ public partial class FrmReportes : Form
         var titulo = new Label { Text = "Reportes", Font = Estilos.Fuente(12, FontStyle.Bold), ForeColor = Color.White, AutoSize = true, Location = new Point(16, 17) };
         header.Controls.Add(titulo);
 
-        // Orden correcto: header (arriba del todo) -> barra -> grid (Fill, al final)
-        Controls.Add(header);
-        Controls.Add(barra);
+        // Orden correcto: grid (Fill) PRIMERO, luego barra, luego header.
+        // En WinForms el último control agregado queda al frente y se dockeriza primero,
+        // por lo que un Dock=Fill agregado al final cubriría header y barra (bug de tablas tapadas).
         Controls.Add(grid);
+        Controls.Add(barra);
+        Controls.Add(header);
     }
 
     private void EstablecerRangoPorDefecto()

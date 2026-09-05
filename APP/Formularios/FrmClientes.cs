@@ -50,30 +50,39 @@ public partial class FrmClientes : Form
         grid.Columns.Add(Col("Estado", "Estado", 90));
         grid.DoubleClick += (_, _) => BtnDetalle_Click(null, EventArgs.Empty);
 
-        // 2. Barra de acciones (Dock=Top) - usando FlowLayoutPanel simple
+        // 2. Barra de acciones (Dock=Top) - usando TableLayoutPanel para alineación correcta
         var barra = new Panel { Dock = DockStyle.Top, Height = 60, BackColor = Color.White, Padding = new Padding(12, 6, 12, 6) };
         
-        // Contenedor principal con FlowLayoutPanel (izquierda a derecha, con wrap)
-        var barraLayout = new FlowLayoutPanel
+        var barraLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            AutoSize = false,
-            WrapContents = false,
+            ColumnCount = 2,
+            RowCount = 1,
             Padding = Padding.Empty,
             Margin = Padding.Empty
         };
+        barraLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        barraLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         barra.Controls.Add(barraLayout);
 
         // --- LADO IZQUIERDO: Búsqueda y filtros ---
+        var pnlFiltros = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.LeftToRight,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            Margin = Padding.Empty
+        };
+        
         var pnlBuscar = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 4, 12, 4), WrapContents = false };
         txtBuscar.Size = new Size(260, 28);
-        txtBuscar.PlaceholderText = "Buscar por nombre, apellido o teléfono…";
+        txtBuscar.PlaceholderText = "Buscar por nombre, apellido o teléfono (número = ID exacto)…";
         txtBuscar.TextChanged += (_, _) => CargarDatos();
         var lblBuscar = new Label { Text = "Buscar:", AutoSize = true, ForeColor = Estilos.Terciario, Margin = new Padding(0, 5, 8, 0), TextAlign = ContentAlignment.MiddleLeft };
         pnlBuscar.Controls.Add(lblBuscar);
         pnlBuscar.Controls.Add(txtBuscar);
-        barraLayout.Controls.Add(pnlBuscar);
+        pnlFiltros.Controls.Add(pnlBuscar);
 
         var pnlEstado = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 4, 12, 4), WrapContents = false };
         cboEstado.Items.AddRange(new object[] { "Todos", "Activo", "Inactivo" });
@@ -84,22 +93,21 @@ public partial class FrmClientes : Form
         var lblEstado = new Label { Text = "Estado:", AutoSize = true, ForeColor = Estilos.Terciario, Margin = new Padding(0, 5, 8, 0), TextAlign = ContentAlignment.MiddleLeft };
         pnlEstado.Controls.Add(lblEstado);
         pnlEstado.Controls.Add(cboEstado);
-        barraLayout.Controls.Add(pnlEstado);
+        pnlFiltros.Controls.Add(pnlEstado);
+        
+        barraLayout.Controls.Add(pnlFiltros, 0, 0);
 
-        // --- ESPACIADOR FLEXIBLE (empuja botones a la derecha) ---
-        var spacer = new Panel { Size = new Size(20, 1) };
-        barraLayout.Controls.Add(spacer);
-
-        // --- LADO DERECHO: Botones (usamos otro FlowLayoutPanel con RightToLeft) ---
+        // --- LADO DERECHO: Botones anclados a la derecha ---
         var pnlBotones = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.RightToLeft,
+            Dock = DockStyle.Fill,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             WrapContents = false,
             Margin = new Padding(0, 4, 0, 4)
         };
-        barraLayout.Controls.Add(pnlBotones);
+        barraLayout.Controls.Add(pnlBotones, 1, 0);
 
         btnDetalle.Text = "Ver detalle";
         btnDetalle.Size = new Size(100, 36);
@@ -134,10 +142,12 @@ public partial class FrmClientes : Form
         var titulo = new Label { Text = "Clientes", Font = Estilos.Fuente(12, FontStyle.Bold), ForeColor = Color.White, AutoSize = true, Location = new Point(16, 17) };
         header.Controls.Add(titulo);
 
-        // Orden correcto: header (arriba del todo) -> barra -> grid (Fill, al final)
-        Controls.Add(header);
-        Controls.Add(barra);
+        // Orden correcto: grid (Fill) PRIMERO, luego barra, luego header.
+        // En WinForms el último control agregado queda al frente y se dockeriza primero,
+        // por lo que un Dock=Fill agregado al final cubriría header y barra (bug de tablas tapadas).
         Controls.Add(grid);
+        Controls.Add(barra);
+        Controls.Add(header);
     }
 
     private void CargarDatos()

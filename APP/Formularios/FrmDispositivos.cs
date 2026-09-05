@@ -39,41 +39,39 @@ public partial class FrmDispositivos : Form
 
         // 2. Barra de acciones
         var barra = new Panel { Dock = DockStyle.Top, Height = 60, BackColor = Color.White, Padding = new Padding(12, 6, 12, 6) };
-        var barraLayout = new FlowLayoutPanel
+        var barraLayout = new TableLayoutPanel
         {
             Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
-            AutoSize = false,
-            WrapContents = false,
+            ColumnCount = 2,
+            RowCount = 1,
             Padding = Padding.Empty,
             Margin = Padding.Empty
         };
+        barraLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        barraLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         barra.Controls.Add(barraLayout);
 
         // Izquierda: Buscar
         var pnlBuscar = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 4, 12, 4), WrapContents = false };
         txtBuscar.Size = new Size(300, 28);
-        txtBuscar.PlaceholderText = "Buscar por tipo, marca, modelo o serie...";
+        txtBuscar.PlaceholderText = "Buscar por tipo, marca, modelo o serie (número = ID exacto)...";
         txtBuscar.TextChanged += (_, _) => CargarDatos();
         var lblBuscar = new Label { Text = "Buscar:", AutoSize = true, ForeColor = Estilos.Terciario, Margin = new Padding(0, 5, 8, 0), TextAlign = ContentAlignment.MiddleLeft };
         pnlBuscar.Controls.Add(lblBuscar);
         pnlBuscar.Controls.Add(txtBuscar);
-        barraLayout.Controls.Add(pnlBuscar);
+        barraLayout.Controls.Add(pnlBuscar, 0, 0);
 
-        // Espaciador
-        var spacer = new Panel { Size = new Size(20, 1) };
-        barraLayout.Controls.Add(spacer);
-
-        // Derecha: Botones (RightToLeft)
+        // Derecha: Botones anclados a la derecha
         var pnlBotones = new FlowLayoutPanel
         {
             FlowDirection = FlowDirection.RightToLeft,
+            Dock = DockStyle.Fill,
             AutoSize = true,
             AutoSizeMode = AutoSizeMode.GrowAndShrink,
             WrapContents = false,
             Margin = new Padding(0, 4, 0, 4)
         };
-        barraLayout.Controls.Add(pnlBotones);
+        barraLayout.Controls.Add(pnlBotones, 1, 0);
 
         btnEditar.Text = "Editar";
         btnEditar.Size = new Size(90, 36);
@@ -94,10 +92,12 @@ public partial class FrmDispositivos : Form
         var titulo = new Label { Text = "Dispositivos", Font = Estilos.Fuente(12, FontStyle.Bold), ForeColor = Color.White, AutoSize = true, Location = new Point(16, 17) };
         header.Controls.Add(titulo);
 
-        // Orden correcto: header (arriba del todo) -> barra -> grid (Fill, al final)
-        Controls.Add(header);
-        Controls.Add(barra);
+        // Orden correcto: grid (Fill) PRIMERO, luego barra, luego header.
+        // En WinForms el último control agregado queda al frente y se dockeriza primero,
+        // por lo que un Dock=Fill agregado al final cubriría header y barra (bug de tablas tapadas).
         Controls.Add(grid);
+        Controls.Add(barra);
+        Controls.Add(header);
     }
 
     private void CargarDatos()

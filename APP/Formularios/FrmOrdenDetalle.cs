@@ -56,7 +56,6 @@ public partial class FrmOrdenDetalle : Form
         // Header
         var header = new Panel { Dock = DockStyle.Top, Height = 56, BackColor = Estilos.Primario };
         header.Controls.Add(new Label { Text = Text, Font = Estilos.Fuente(12, FontStyle.Bold), ForeColor = Color.White, AutoSize = true, Location = new Point(16, 17) });
-        Controls.Add(header);
 
         // Layout principal: tabla de 2 columnas (izquierda: formulario, derecha: pagos)
         var mainLayout = new TableLayoutPanel
@@ -69,7 +68,6 @@ public partial class FrmOrdenDetalle : Form
         };
         mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 60F)); // Izquierda
         mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40F)); // Derecha
-        Controls.Add(mainLayout);
 
         // Panel izquierdo - formulario en TableLayoutPanel
         var leftLayout = new TableLayoutPanel
@@ -181,6 +179,12 @@ public partial class FrmOrdenDetalle : Form
         lblSaldo.Font = Estilos.Fuente(10, FontStyle.Bold);
         lblSaldo.AutoSize = true;
         pnlTotales.Controls.Add(lblSaldo);
+
+        // Orden correcto: mainLayout (Fill) PRIMERO, luego header (Top).
+        // En WinForms el último control agregado queda al frente y se dockeriza primero,
+        // por lo que un Dock=Fill agregado al final cubriría el header (bug de tablas tapadas).
+        Controls.Add(mainLayout);
+        Controls.Add(header);
     }
 
     private static int AgregarFila(TableLayoutPanel layout, int row, string etiqueta, Control campo, int alto = 28)

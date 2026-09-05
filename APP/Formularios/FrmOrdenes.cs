@@ -72,7 +72,7 @@ public partial class FrmOrdenes : Form
         // Buscar
         var pnlBuscar = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 4, 12, 4), WrapContents = false };
         txtBuscar.Size = new Size(220, 28);
-        txtBuscar.PlaceholderText = "Buscar orden, cliente, dispositivo...";
+        txtBuscar.PlaceholderText = "Buscar orden, cliente, dispositivo (número = ID)...";
         txtBuscar.TextChanged += (_, _) => CargarDatos();
         var lblBuscar = new Label { Text = "Buscar:", AutoSize = true, ForeColor = Estilos.Terciario, Margin = new Padding(0, 5, 8, 0), TextAlign = ContentAlignment.MiddleLeft };
         pnlBuscar.Controls.Add(lblBuscar);
@@ -149,10 +149,12 @@ public partial class FrmOrdenes : Form
         var titulo = new Label { Text = Text, Font = Estilos.Fuente(12, FontStyle.Bold), ForeColor = Color.White, AutoSize = true, Location = new Point(16, 17) };
         header.Controls.Add(titulo);
 
-        // Orden correcto: header (arriba del todo) -> barra -> grid (Fill, al final)
-        Controls.Add(header);
-        Controls.Add(barra);
+        // Orden correcto: grid (Fill) PRIMERO, luego barra, luego header.
+        // En WinForms el último control agregado queda al frente y se dockeriza primero,
+        // por lo que un Dock=Fill agregado al final cubriría header y barra (bug de tablas tapadas).
         Controls.Add(grid);
+        Controls.Add(barra);
+        Controls.Add(header);
     }
 
     private static EstadoItem[] EstadoTodos() =>

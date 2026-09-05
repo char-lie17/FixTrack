@@ -39,7 +39,6 @@ public partial class FrmDashboard : Form
             BackColor = Estilos.Primario,
             Padding = new Padding(16, 0, 16, 0)
         };
-        Controls.Add(barra);
 
         var barraLayout = new TableLayoutPanel
         {
@@ -104,15 +103,20 @@ public partial class FrmDashboard : Form
         panelLateral.Width = 200;
         panelLateral.MinimumSize = new Size(180, 0);
         panelLateral.BackColor = Estilos.Terciario;
-        Controls.Add(panelLateral);
 
         // Contenido
         panelContenido.Dock = DockStyle.Fill;
         panelContenido.BackColor = Estilos.Neutro;
         panelContenido.Padding = Padding.Empty;
-        Controls.Add(panelContenido);
 
-        // NO hacer BringToFront del panel lateral - el orden natural de Dock (Left luego Fill) lo maneja
+        // Orden correcto: contenido (Fill) PRIMERO, luego lateral (Left), luego barra (Top).
+        // En WinForms el último control agregado queda al frente y se dockeriza primero,
+        // por lo que un Dock=Fill agregado al final cubriría el menú lateral y la barra
+        // (bug de tablas tapadas que también afectaba al dashboard).
+        Controls.Add(panelContenido);
+        Controls.Add(panelLateral);
+        Controls.Add(barra);
+
         CrearMenuLateral();
     }
 
@@ -271,7 +275,6 @@ public partial class FrmDashboard : Form
         panelContenido.Controls.Clear();
         _formularioActual?.Dispose();
         _formularioActual = null;
-        panelContenido.BringToFront();
 
         var layout = new TableLayoutPanel
         {
