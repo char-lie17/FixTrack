@@ -1,0 +1,46 @@
+# --- Build artifacts ---
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+build/
+dist/
+
+# --- Visual Studio / Rider ---
+.vs/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+# --- .NET ---
+project.lock.json
+project.fragment.lock.json
+artifacts/
+*.nuget.props
+*.nuget.targets
+
+# --- NuGet ---
+*.nupkg
+*.snupkg
+**/packages/
+!**/packages/build/
+*.nuspec
+
+# --- User-specific / secrets ---
+appsettings.*.json
+!appsettings.json
+*.pfx
+*.snk
+secrets.json
+*.secret
+
+# --- Logs ---
+*.log
+*.trx
+
+# --- OS ---
+Thumbs.db
+Desktop.ini
+.DS_Store
