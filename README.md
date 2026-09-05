@@ -170,38 +170,58 @@ FixTrack/
 
 ## 🐛 Bugs Conocidos
 
-### **Bug #1: Tabla de Reportes vacía** (crítico)
+### **Bug #1: Tablas tapadas (z-order de docking)** ✅ CORREGIDO
+
+**Módulo:** Todos los formularios de listado + Dashboard  
+**Síntoma:** El grid (DataGridView) cubría el header y la barra de filtros — "las tablas salen tapadas".
+
+**Causa raíz:** En WinForms el último control agregado queda al frente del z-order y se dockeriza primero. Los formularios agregaban el control `Dock=Fill` al final, por lo que cubría todo.
+
+**Corrección (commit `f99cd8c`):** Se reordenaron los `Controls.Add()` en 11 formularios para agregar el control `Dock=Fill` primero:
+- 7 listados: `FrmClientes`, `FrmDispositivos`, `FrmOrdenes`, `FrmPagos`, `FrmReportes`, `FrmTecnicos`, `FrmUsuarios`
+- `FrmDashboard` (contenido → lateral → barra)
+- Detalles: `FrmClienteDetalle`, `FrmOrdenDetalle`, `FrmPagoDetalle`
+
+**Estado:** ✅ Resuelto y verificado
+
+---
+
+### **Bug #2: Tabla de Reportes vacía** ✅ CORREGIDO
 
 **Módulo:** `FrmReportes`  
-**Síntoma:** Al generar cualquier reporte, la tabla (DataGridView) aparece completamente vacía, aunque los datos se cargan correctamente.
+**Síntoma:** Al generar cualquier reporte, la tabla (DataGridView) aparecía vacía.
 
-**Causa raíz:** `UIHelper.ConfigurarGrilla()` establece `AutoGenerateColumns = false`, pero `FrmReportes` nunca agrega columnas manualmente. Al asignar un `DataTable` como `DataSource`, el grid no tiene columnas para mostrar.
+**Causa raíz:** `UIHelper.ConfigurarGrilla()` establece `AutoGenerateColumns = false`, pero `FrmReportes` no agregaba columnas manualmente.
 
-**Ubicación:** `APP/Formularios/FrmReportes.cs:40-42`
+**Corrección (commit `d1e8c56`):** Se habilitó `AutoGenerateColumns = true` en el grid de reportes.
 
-**Estado:** Pendiente de corrección
+**Estado:** ✅ Resuelto y verificado
 
 ---
 
-### **Bug #2: Filtros de búsqueda (menor)**
+### **Bug #3: Búsqueda por ID numérico**
 
 **Módulo:** Varios (Órdenes, Clientes, etc.)  
-**Síntoma:** En algunos casos, al buscar por ID numérico, los filtros de estado/fecha se ignoran.
+**Síntoma:** Al buscar por ID numérico, se hace búsqueda exacta por ID.
 
-**Causa raíz:** Lógica intencional en los DAL (`Buscar()` prioriza búsqueda exacta por ID cuando el texto es numérico), pero puede resultar confusa.
+**Causa raíz:** Comportamiento por diseño (`Buscar()` prioriza búsqueda exacta por ID cuando el texto es numérico). No es un bug.
 
-**Estado:** Comportamiento por diseño, puede mejorarse en UX
+**Mejora (commit `f99cd8c`):** Los placeholders ahora aclaran que un número busca por ID exacto.
+
+**Estado:** ✅ Documentado (comportamiento correcto)
 
 ---
 
-### **Bug #3: Layout de botones (cosmético)**
+### **Bug #4: Botones desalineados a la derecha** ✅ CORREGIDO
 
 **Módulo:** Varios formularios de lista  
-**Síntoma:** Los botones ("+ Nuevo cliente", etc.) no se alinean completamente a la derecha como en los mockups.
+**Síntoma:** Los botones ("+ Nuevo cliente", etc.) no se alineaban a la derecha.
 
 **Causa raíz:** Los `spacer` (`Panel { Size = new Size(20,1) }`) en `FlowLayoutPanel` no funcionan como espaciadores flexibles.
 
-**Estado:** Cosmético, no afecta funcionalidad
+**Corrección (commit `f99cd8c`):** Se reemplazó el layout por `TableLayoutPanel` con columna flexible (AutoSize + Percent) y el panel de botones anclado a la derecha con `RightToLeft`.
+
+**Estado:** ✅ Resuelto
 
 ---
 

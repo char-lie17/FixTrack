@@ -1,4 +1,4 @@
-# Diagnóstico Técnico y Plan de Corrección
+﻿# DiagnÃ³stico TÃ©cnico y Plan de CorrecciÃ³n
 
 **Fecha:** 05/09/2026  
 **Autor:** Carlos Castillo  
@@ -6,47 +6,114 @@
 
 ---
 
-## 🔍 Resumen Ejecutivo
+## ðŸ” Resumen Ejecutivo
 
-Este documento detalla los bugs identificados en el snapshot inicial del proyecto FixTrack, su impacto, causa raíz y plan de corrección. Los bugs fueron reportados por Henry Creel como "problemas en la CRUD, los filtros no funcionan al 100%, y algunas tablas no se muestran bien, osea como que salen tapadas".
+Este documento detalla los bugs identificados en el snapshot inicial del proyecto FixTrack, su impacto, causa raÃ­z y plan de correcciÃ³n. Los bugs fueron reportados por Henry Creel como "problemas en la CRUD, los filtros no funcionan al 100%, y algunas tablas no se muestran bien, osea como que salen tapadas".
 
 ### Hallazgos principales
 
-| Bug | Severidad | Módulo | Impacto | Estado |
+| Bug | Severidad | MÃ³dulo | Impacto | Estado |
 |-----|-----------|---------|---------|--------|
-| **#1** Grid de reportes vacío | 🔴 **CRÍTICO** | `FrmReportes` | Los reportes no se visualizan | Pendiente |
-| **#2** Filtro por ID ignora otros criterios | 🟡 **MENOR** | Varios DAL | Comportamiento confuso pero funcional | Diseño |
-| **#3** Botones desalineados | 🟢 **COSMÉTICO** | Varios formularios | Estética UI no coincide con mockups | Pendiente |
+| **#1** Tablas tapadas (z-order de docking) | ðŸ”´ **CRÃTICO** | Todos los listados + Dashboard | Grids cubrÃ­an header/barra/menÃº | âœ… **CORREGIDO** (`f99cd8c`) |
+| **#2** Grid de reportes vacÃ­o | ðŸ”´ **CRÃTICO** | `FrmReportes` | Los reportes no se visualizaban | âœ… **CORREGIDO** (`d1e8c56`) |
+| **#3** Filtro por ID numÃ©rico | ðŸŸ¡ **MENOR** | Varios DAL | Comportamiento confuso pero correcto | âœ… Documentado + UX |
+| **#4** Botones desalineados | ðŸŸ¢ **COSMÃ‰TICO** | Varios formularios | EstÃ©tica UI no coincidÃ­a con mockups | âœ… **CORREGIDO** (`f99cd8c`) |
 
 ---
 
-## 🐛 Bug #1: Grid de Reportes Vacío
+## ðŸ› Bug #1: Tablas Tapadas (Z-Order de Docking) â€” CAUSA RAÃZ REAL
 
-### Descripción
+### DescripciÃ³n
 
-Al generar cualquiera de los 4 reportes disponibles (Órdenes por estado, Órdenes por técnico, Servicios completados, Pagos registrados), el `DataGridView` aparece **completamente vacío** a pesar de que:
-- Los datos se consultan correctamente desde SQL Server
-- El `DataTable` tiene filas y columnas
-- No hay excepciones lanzadas
+**Este es el bug principal que reportÃ³ Henry.** En todos los formularios de listado (Clientes, Dispositivos, Ã“rdenes, Pagos, Reportes, TÃ©cnicos, Usuarios), los grids aparecÃ­an cubriendo el header y la barra de filtros. En el Dashboard, el `panelContenido` cubrÃ­a el menÃº lateral.
 
-**Reproducción:**
+**ReproducciÃ³n:**
 1. Login como `admin` / `admin123`
-2. Ir a **Reportes**
-3. Seleccionar cualquier reporte
-4. Click en "Generar"
-5. **Resultado:** Tabla vacía (sin columnas ni filas visibles)
+2. Ir a cualquier mÃ³dulo (Clientes, Ã“rdenes, etc.)
+3. **Resultado:** La tabla (DataGridView) tapa el encabezado azul y la barra de bÃºsqueda/filtros
 
-### Causa raíz
+### Causa raÃ­z (verificada empÃ­ricamente)
 
-**Ubicación:** `APP/Formularios/FrmReportes.cs:40-42`
+En WinForms, **el Ãºltimo control agregado al Form queda al frente del z-order y se dockeriza primero**. Cuando un control `Dock=Fill` se agrega al final:
+
+```csharp
+// CÃ³digo ORIGINAL (incorrecto):
+Controls.Add(header);   // Dock=Top  â†’ queda al fondo
+Controls.Add(barra);    // Dock=Top  â†’ queda al medio
+Controls.Add(grid);     // Dock=Fill â†’ queda al FRENTE â†’ se dockeriza PRIMERO â†’ cubre todo
+```
+
+Resultado verificado con test de docking (Bounds del grid = `{0,0,800,600}`, el Ã¡rea completa):
+
+```
+Patron actual: DataGridView Dock=Fill Bounds={X=0,Y=0,Width=800,Height=600}  â† CUBRE TODO
+```
+
+### SoluciÃ³n aplicada
+
+**Reordenar los `Controls.Add()` para que el control `Dock=Fill` se agregue PRIMERO:**
+
+```csharp
+// CÃ³digo CORREGIDO:
+Controls.Add(grid);     // Dock=Fill â†’ al fondo â†’ se dockeriza Ãºltimo â†’ ocupa espacio restante
+Controls.Add(barra);    // Dock=Top
+Controls.Add(header);   // Dock=Top
+```
+
+Resultado verificado:
+
+```
+Patron corregido: DataGridView Dock=Fill Bounds={X=0,Y=116,Width=800,Height=484}  â† CORRECTO
+Panel  Dock=Top Bounds={X=0,Y=56,Width=800,Height=60}
+Panel  Dock=Top Bounds={X=0,Y=0,Width=800,Height=56}
+```
+
+### Formularios corregidos (11)
+
+| Formulario | Cambio |
+|-----------|--------|
+| `FrmClientes` | grid â†’ barra â†’ header |
+| `FrmDispositivos` | grid â†’ barra â†’ header |
+| `FrmOrdenes` | grid â†’ barra â†’ header |
+| `FrmPagos` | grid â†’ barra â†’ header |
+| `FrmReportes` | grid â†’ barra â†’ header |
+| `FrmTecnicos` | grid â†’ barra â†’ header |
+| `FrmUsuarios` | grid â†’ barra â†’ header |
+| `FrmDashboard` | contenido â†’ lateral â†’ barra (+ quitar `panelContenido.BringToFront()`) |
+| `FrmClienteDetalle` | grid â†’ info â†’ etiqueta |
+| `FrmOrdenDetalle` | mainLayout â†’ header |
+| `FrmPagoDetalle` | grid â†’ header â†’ bottomPanel |
+
+### Archivos y mÃ©todos
+
+- `APP/Formularios/*.cs` â€” todos los `InitializeUi()` / `BuildUi()` / `CrearEstructura()`
+- `APP/Formularios/FrmDashboard.cs:278` â€” eliminado `panelContenido.BringToFront()` que revertÃ­a el fix
+
+### EstimaciÃ³n
+
+- **Complejidad:** Baja
+- **Tiempo real:** ~30 minutos
+- **Archivos afectados:** 11
+
+---
+
+## ðŸ› Bug #2: Grid de Reportes VacÃ­o
+
+### DescripciÃ³n
+
+Al generar cualquiera de los 4 reportes disponibles (Ã“rdenes por estado, Ã“rdenes por tÃ©cnico, Servicios completados, Pagos registrados), el `DataGridView` aparecÃ­a **completamente vacÃ­o** a pesar de que los datos se consultaban correctamente desde SQL Server.
+
+### Causa raÃ­z
+
+**UbicaciÃ³n:** `APP/Formularios/FrmReportes.cs:40-42`
 
 ```csharp
 // 1. Grilla
 grid.Dock = DockStyle.Fill;
-UIHelper.ConfigurarGrilla(grid);  // ← Aquí está el problema
+UIHelper.ConfigurarGrilla(grid);  // â† Establece AutoGenerateColumns = false
 ```
 
-**Análisis de `UIHelper.ConfigurarGrilla()`** (`APP/Formularios/UIHelper.cs:29-43`):
+**AnÃ¡lisis de `UIHelper.ConfigurarGrilla()`** (`APP/Formularios/UIHelper.cs:29-43`):
 
 ```csharp
 public static void ConfigurarGrilla(DataGridView grid)
@@ -55,7 +122,7 @@ public static void ConfigurarGrilla(DataGridView grid)
     grid.AllowUserToAddRows = false;
     grid.AllowUserToDeleteRows = false;
     grid.AllowUserToResizeRows = false;
-    grid.AutoGenerateColumns = false;  // ← ¡PROBLEMA!
+    grid.AutoGenerateColumns = false;  // â† Â¡PROBLEMA!
     grid.RowHeadersVisible = false;
     grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
     grid.MultiSelect = false;
@@ -65,408 +132,166 @@ public static void ConfigurarGrilla(DataGridView grid)
 }
 ```
 
-**El problema:** `AutoGenerateColumns = false` indica a WinForms que NO genere columnas automáticamente al asignar el `DataSource`. Esto requiere que el programador agregue columnas manualmente **antes** de asignar el `DataSource`.
+**El problema:** `AutoGenerateColumns = false` indica a WinForms que NO genere columnas automÃ¡ticamente al asignar el `DataSource`. Esto requiere que el programador agregue columnas manualmente **antes** de asignar el `DataSource`.
 
-**En todos los demás formularios** (Clientes, Órdenes, Pagos, etc.), después de llamar a `ConfigurarGrilla()`, se agregan columnas manualmente:
+**En todos los demÃ¡s formularios** (Clientes, Ã“rdenes, Pagos, etc.), despuÃ©s de llamar a `ConfigurarGrilla()`, se agregan columnas manualmente:
 
 ```csharp
 // FrmClientes.cs (correcto)
 UIHelper.ConfigurarGrilla(grid);
 grid.Columns.Add(UIHelper.Col("ID", "ClienteID", 60));
-grid.Columns.Add(UIHelper.Col("Nombre", "Nombre", 120));
-// ... más columnas
+// ... mÃ¡s columnas
 ```
 
 **En `FrmReportes`**, esto **NO se hace**. El grid queda sin columnas, y al asignar `grid.DataSource = _tablaActual`, WinForms no genera columnas porque `AutoGenerateColumns = false`.
 
-### Impacto
+### SoluciÃ³n aplicada
 
-- **Severidad:** 🔴 **CRÍTICA**
-- **Usuarios afectados:** Administrador, Empleado
-- **Funcionalidad perdida:** Módulo completo de Reportes (gestión de métricas de negocio)
-- **Workaround:** Ninguno disponible desde la UI
-
-### Solución propuesta
-
-**Opción A: Activar autogeneración de columnas** (recomendada para reportes dinámicos)
+Se habilitÃ³ `AutoGenerateColumns = true` en `FrmReportes` (commit `d1e8c56`):
 
 ```csharp
-// FrmReportes.cs:40-42
-grid.Dock = DockStyle.Fill;
-grid.ReadOnly = true;
-grid.AllowUserToAddRows = false;
-grid.AllowUserToDeleteRows = false;
-grid.AutoGenerateColumns = true;  // ← Permitir autogeneración
-grid.RowHeadersVisible = false;
-grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
-grid.BackgroundColor = Color.White;
-grid.BorderStyle = BorderStyle.None;
-grid.Font = Estilos.Fuente(9);
+grid.AutoGenerateColumns = true;  // â† CORREGIDO
 ```
 
-**Ventaja:** Cada reporte tiene esquema diferente, la autogeneración se adapta automáticamente.
+Como cada reporte tiene un esquema diferente, la autogeneraciÃ³n se adapta automÃ¡ticamente.
 
-**Opción B: Definir columnas manualmente por reporte**
-
-Agregar lógica en `BtnGenerar_Click` para recrear columnas según el reporte:
-
-```csharp
-private void BtnGenerar_Click(object? sender, EventArgs e)
-{
-    // ... código existente ...
-    
-    grid.Columns.Clear();
-    
-    // Configurar columnas según el reporte
-    switch (reporte)
-    {
-        case "Órdenes por estado":
-            grid.Columns.Add(UIHelper.Col("Estado", "Estado", 150));
-            grid.Columns.Add(UIHelper.Col("Cantidad", "Cantidad", 100));
-            grid.Columns.Add(UIHelper.Col("Subtotal", "Subtotal", 120));
-            break;
-        // ... otros casos
-    }
-    
-    grid.DataSource = _tablaActual;
-}
-```
-
-**Desventaja:** Más código, mantenimiento complejo.
-
-**Decisión:** **Opción A** (autogeneración).
-
-### Estimación
+### EstimaciÃ³n
 
 - **Complejidad:** Baja
 - **Tiempo:** 5 minutos
 - **Archivos afectados:** 1 (`FrmReportes.cs`)
-- **Líneas modificadas:** ~10
+- **LÃ­neas modificadas:** ~10
 
 ---
 
-## 🐛 Bug #2: Filtro por ID Ignora Otros Criterios
+## ðŸ› Bug #3: Filtro por ID Ignora Otros Criterios
 
-### Descripción
+### DescripciÃ³n
 
-En varios módulos (Clientes, Dispositivos, Órdenes, Técnicos, Usuarios, Pagos), cuando el usuario escribe un **número** en el campo de búsqueda, el sistema interpreta esto como búsqueda por ID y **ignora** los demás filtros (estado, fechas, método de pago).
+En varios mÃ³dulos (Clientes, Dispositivos, Ã“rdenes, TÃ©cnicos, Usuarios, Pagos), cuando el usuario escribe un **nÃºmero** en el campo de bÃºsqueda, el sistema interpreta esto como bÃºsqueda por ID.
 
-**Ejemplo:**
+### Causa raÃ­z
 
-1. Ir a **Órdenes**
-2. Filtrar por estado: **"En reparación"**
-3. Filtrar por fecha: **01/08/2026 - 31/08/2026**
-4. Buscar: **"5"**
-5. **Resultado esperado:** Orden #5 solo si está "En reparación" y en el rango de fechas
-6. **Resultado real:** Orden #5 sin importar estado ni fechas
-
-### Causa raíz
-
-**Ubicación:** Varios archivos DAL (`ClienteDAL.Buscar()`, `DispositivoDAL.Buscar()`, etc.)
-
-**Ejemplo de `ClienteDAL.cs:51-72`:**
+**UbicaciÃ³n:** Varios archivos DAL (`ClienteDAL.Buscar()`, `DispositivoDAL.Buscar()`, etc.)
 
 ```csharp
-public static List<Cliente> Buscar(string? texto, string? estado)
-{
-    var textoLimpio = texto?.Trim();
-    var esId = int.TryParse(textoLimpio, out var idBuscado);
-
-    var sql = new StringBuilder($"SELECT {Columnas} FROM Clientes WHERE 1 = 1");
-    if (esId)
-    {
-        // Solo busca por ID, ignora estado
-        sql.Append(" AND ClienteID = @ClienteIDBuscado");
-    }
-    else if (!string.IsNullOrWhiteSpace(textoLimpio))
-    {
-        sql.Append(" AND (Nombre LIKE @Texto OR Apellido LIKE @Texto ...)");
-    }
-    
-    // El filtro de estado se aplica DESPUÉS
-    if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
-        sql.Append(" AND Estado = @Estado");  // ← No se alcanza si esId=true
-    
-    // ...
-}
-```
-
-**El problema:** La lógica de `if (esId) {...} else if (...)` hace que la búsqueda por ID **excluya** la búsqueda textual, pero el filtro de estado se agrega **después** de la estructura `if/else`, por lo que **sí se aplica**. Sin embargo, en algunos DAL (como `OrdenServicioDAL`), la estructura es más compleja y el problema es real.
-
-**Verificación en `OrdenServicioDAL.cs:46-69`:**
-
-```csharp
+var esId = int.TryParse(textoLimpio, out var idBuscado);
+...
 if (esId)
 {
-    sql.Append(" AND o.OrdenID = @OrdenIDBuscado");
+    sql.Append(" AND ClienteID = @ClienteIDBuscado");  // BÃºsqueda exacta por ID
 }
 else if (!string.IsNullOrWhiteSpace(textoLimpio))
 {
-    sql.Append(" AND (c.Nombre LIKE @Texto OR ...)");
+    sql.Append(" AND (Nombre LIKE @Texto OR ...)");     // BÃºsqueda por texto
 }
-// Los filtros de estado/fechas se agregan DESPUÉS, así que sí se aplican
+// Los filtros de estado/fechas se agregan DESPUÃ‰S y SÃ se aplican
 if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
-    sql.Append(" AND o.Estado = @Estado");
-if (desde.HasValue)
-    sql.Append(" AND o.FechaIngreso >= @Desde");
-// ...
+    sql.Append(" AND Estado = @Estado");
 ```
 
-**Conclusión:** Revisando el código, **los filtros de estado/fechas SÍ se aplican incluso con búsqueda por ID**. El bug reportado no existe en el código actual. Es posible que:
+**ConclusiÃ³n:** Revisando el cÃ³digo, **los filtros de estado/fechas SÃ se aplican incluso con bÃºsqueda por ID**. El comportamiento es correcto por diseÃ±o (prioridad de bÃºsqueda exacta por ID).
 
-1. Henry probó una versión anterior que sí tenía este bug
-2. La confusión proviene de que buscar "5" muestra solo la Orden #5 (comportamiento correcto) pero esperaba ver TODAS las órdenes que coincidan con estado/fecha Y que contengan "5" en algún campo
+### SoluciÃ³n aplicada
 
-### Impacto
-
-- **Severidad:** 🟡 **MENOR** (o inexistente)
-- **Naturaleza:** Comportamiento por diseño (prioridad de búsqueda exacta)
-- **Confusión UX:** Los usuarios pueden no entender que escribir un número cambia el modo de búsqueda
-
-### Solución propuesta
-
-**No requiere corrección de código**, pero puede mejorarse la UX:
-
-**Opción 1: Agregar tooltip/placeholder explicativo**
+Mejora de UX (commit `f99cd8c`): placeholders actualizados para aclarar el comportamiento:
 
 ```csharp
-txtBuscar.PlaceholderText = "Buscar por nombre/apellido (o ID exacto si es número)";
+txtBuscar.PlaceholderText = "Buscar por nombre, apellido o telÃ©fono (nÃºmero = ID exacto)â€¦";
 ```
 
-**Opción 2: Agregar búsqueda combinada**
+### EstimaciÃ³n
 
-Cambiar lógica para que búsqueda por ID **también** busque por texto parcial:
-
-```csharp
-if (esId)
-{
-    sql.Append(" AND (ClienteID = @ClienteIDBuscado OR Nombre LIKE @Texto OR ...)");
-}
-else if (!string.IsNullOrWhiteSpace(textoLimpio))
-{
-    sql.Append(" AND (Nombre LIKE @Texto OR ...)");
-}
-```
-
-**Decisión:** **No acción inmediata** (comportamiento correcto), documentar en README.
-
-### Estimación
-
-- **Complejidad:** N/A (no es bug)
-- **Tiempo:** 0 minutos
-- **Archivos afectados:** 0
+- **Complejidad:** N/A (no era bug)
+- **Tiempo:** 5 minutos (UX)
+- **Archivos afectados:** 6 (placeholders)
 
 ---
 
-## 🐛 Bug #3: Botones Desalineados a la Derecha
+## ðŸ› Bug #4: Botones Desalineados a la Derecha
 
-### Descripción
+### DescripciÃ³n
 
-En los formularios de listado (Clientes, Dispositivos, Órdenes, Pagos, Técnicos, Usuarios), los botones de acción ("+ Nuevo cliente", "Editar", "Cambiar estado", etc.) **no se alinean completamente a la derecha** de la barra de herramientas, como se muestra en los mockups.
+En los formularios de listado (Clientes, Dispositivos, TÃ©cnicos, Usuarios), los botones de acciÃ³n ("+ Nuevo cliente", "Editar", "Cambiar estado", etc.) no se alineaban a la derecha de la barra de herramientas.
 
-**Mockup esperado:**
-```
-[Buscar: _______] [Estado: Todos ▼]          [Cambiar estado] [Editar] [+ Nuevo cliente]
-```
+### Causa raÃ­z
 
-**Resultado actual:**
-```
-[Buscar: _______] [Estado: Todos ▼] [  ] [Cambiar estado] [Editar] [+ Nuevo cliente]
-```
-
-Hay un pequeño espacio, pero los botones no están "pegados" al borde derecho.
-
-### Causa raíz
-
-**Ubicación:** Varios archivos de formularios (`FrmClientes.cs:89-91`, `FrmDispositivos.cs:63-65`, etc.)
-
-**Código problemático:**
+**UbicaciÃ³n:** Varios archivos de formularios (`FrmClientes.cs`, `FrmDispositivos.cs`, `FrmTecnicos.cs`, `FrmUsuarios.cs`)
 
 ```csharp
-// Espaciador flexible (empuja botones a la derecha)
-var spacer = new Panel { Size = new Size(20, 1) };
+// Espaciador que NO funciona como flexible:
+var spacer = new Panel { Size = new Size(20, 1) };  // Solo ocupa 20px fijos
 barraLayout.Controls.Add(spacer);
 ```
 
-**El problema:** En WinForms, un `Panel` con tamaño fijo (`Size = new Size(20, 1)`) **NO actúa como espaciador flexible** dentro de un `FlowLayoutPanel`. Solo ocupa exactamente 20px.
+En WinForms, un `Panel` con tamaÃ±o fijo **NO actÃºa como espaciador flexible** dentro de un `FlowLayoutPanel`.
 
-Para lograr alineación derecha en `FlowLayoutPanel`, hay dos enfoques correctos:
+### SoluciÃ³n aplicada (commit `f99cd8c`)
 
-**Enfoque A: Usar `FlowDirection = RightToLeft` en un sub-panel** (ya implementado)
-
-Los formularios **ya usan** un sub-`FlowLayoutPanel` con `RightToLeft` para los botones:
+Se reemplazÃ³ el layout por `TableLayoutPanel` con columna flexible:
 
 ```csharp
-var pnlBotones = new FlowLayoutPanel
-{
-    FlowDirection = FlowDirection.RightToLeft,
-    AutoSize = true,
-    WrapContents = false,
-    Margin = new Padding(0, 4, 0, 4)
-};
-barraLayout.Controls.Add(pnlBotones);
-```
-
-Esto **funciona correctamente** para alinear botones dentro del panel. El problema es que el `pnlBotones` en sí mismo no se ancla al borde derecho del contenedor padre.
-
-**Enfoque B: Usar `Dock = DockStyle.Right` o `TableLayoutPanel` con columna flexible**
-
-### Impacto
-
-- **Severidad:** 🟢 **COSMÉTICO**
-- **Usuarios afectados:** Todos
-- **Funcionalidad afectada:** Ninguna (solo visual)
-- **Comparación:** No coincide con mockups del Entregable 1
-
-### Solución propuesta
-
-**Reemplazar el `spacer` Panel por configuración correcta de `FlowLayoutPanel`:**
-
-**Cambio en `FrmClientes.cs` (ejemplo):**
-
-```csharp
-// ANTES (líneas 54-91):
-var barraLayout = new FlowLayoutPanel
-{
-    Dock = DockStyle.Fill,
-    FlowDirection = FlowDirection.LeftToRight,
-    AutoSize = false,
-    WrapContents = false,
-    Padding = Padding.Empty,
-    Margin = Padding.Empty
-};
-
-// ... controles de búsqueda ...
-
-var spacer = new Panel { Size = new Size(20, 1) };  // ← No funciona
-barraLayout.Controls.Add(spacer);
-
-var pnlBotones = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, ... };
-barraLayout.Controls.Add(pnlBotones);
-
-// DESPUÉS:
-var barraLayout = new TableLayoutPanel  // ← Cambiar a TableLayoutPanel
+var barraLayout = new TableLayoutPanel
 {
     Dock = DockStyle.Fill,
     ColumnCount = 2,
-    RowCount = 1,
-    Padding = Padding.Empty,
-    Margin = Padding.Empty
+    RowCount = 1
 };
-barraLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));   // Filtros (izq)
-barraLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); // Botones (der, expandible)
+barraLayout.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));      // Filtros (izquierda)
+barraLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); // Botones (derecha)
 
-var pnlFiltros = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, ... };
-// ... agregar búsqueda, estado ...
-barraLayout.Controls.Add(pnlFiltros, 0, 0);
-
-var pnlBotones = new FlowLayoutPanel { 
+var pnlBotones = new FlowLayoutPanel
+{
     FlowDirection = FlowDirection.RightToLeft,
-    Dock = DockStyle.Right,  // ← Anclar a la derecha
-    AutoSize = true,
-    ...
+    Dock = DockStyle.Fill,
+    AutoSize = true
 };
-// ... agregar botones ...
-barraLayout.Controls.Add(pnlBotones, 1, 0);
 ```
 
-### Estimación
+### EstimaciÃ³n
 
-- **Complejidad:** Media (requiere refactoring de layout)
-- **Tiempo:** 30 minutos × 6 formularios = **3 horas**
-- **Archivos afectados:** 6
-  - `FrmClientes.cs`
-  - `FrmDispositivos.cs`
-  - `FrmOrdenes.cs`
-  - `FrmPagos.cs`
-  - `FrmTecnicos.cs`
-  - `FrmUsuarios.cs`
-- **Líneas modificadas:** ~40 por archivo = **240 líneas**
-
-### Decisión
-
-**Posponer** para release posterior (no crítico). Documentar como "known issue cosmético".
+- **Complejidad:** Media
+- **Tiempo real:** ~30 minutos
+- **Archivos afectados:** 4
 
 ---
 
-## 📊 Resumen de Estimaciones
+## ðŸ“Š Resumen de Estimaciones
 
-| Bug | Prioridad | Tiempo estimado | Archivos | Líneas |
-|-----|-----------|-----------------|----------|--------|
-| #1 Grid reportes vacío | 🔴 P0 | 5 min | 1 | ~10 |
-| #2 Filtro por ID | 🟡 P2 | 0 min (no bug) | 0 | 0 |
-| #3 Botones desalineados | 🟢 P3 | 3 horas (pospuesto) | 6 | ~240 |
+| Bug | Prioridad | Tiempo estimado | Archivos | LÃ­neas | Estado |
+|-----|-----------|-----------------|----------|--------|--------|
+| #1 Tablas tapadas (z-order) | ðŸ”´ P0 | 30 min | 11 | ~90 | âœ… CORREGIDO |
+| #2 Grid reportes vacÃ­o | ðŸ”´ P0 | 5 min | 1 | ~10 | âœ… CORREGIDO |
+| #3 Filtro por ID | ðŸŸ¡ P2 | 5 min (UX) | 6 | ~6 | âœ… Documentado |
+| #4 Botones desalineados | ðŸŸ¢ P3 | 30 min | 4 | ~90 | âœ… CORREGIDO |
 
-**Total para commit inmediato:** 5 minutos (solo Bug #1)
-
----
-
-## 🛠️ Plan de Corrección
-
-### Fase 1: Corrección crítica (este commit)
-
-1. ✅ Documentar bugs (este archivo)
-2. ⏳ Arreglar Bug #1 (FrmReportes)
-3. ⏳ Agregar tests de UI para reportes
-4. ⏳ Commit y push
-
-### Fase 2: Mejoras UX (próximo release)
-
-1. Agregar tooltips/placeholders explicativos (Bug #2)
-2. Refactorizar layout de barras de herramientas (Bug #3)
-3. Agregar validación de conexión al inicio
-
-### Fase 3: Optimizaciones (futuro)
-
-1. Migrar a Entity Framework Core
-2. Agregar campo Estado a Dispositivos
-3. Exportar reportes a PDF
+**Total:** 4 bugs, todos resueltos. Build: 0 errores, 0 warnings.
 
 ---
 
-## 🧪 Plan de Testing
+## ðŸ§ª Plan de Testing
+
+### Tests de regresiÃ³n (post-correcciÃ³n)
+
+Verificar que las correcciones **no afectan** otros formularios:
+
+- âœ… FrmClientes grid muestra columnas Y header/barra visibles
+- âœ… FrmDispositivos grid muestra columnas Y header/barra visibles
+- âœ… FrmOrdenes grid muestra columnas Y header/barra visibles
+- âœ… FrmPagos grid muestra columnas Y header/barra visibles
+- âœ… FrmTecnicos grid muestra columnas Y header/barra visibles
+- âœ… FrmUsuarios grid muestra columnas Y header/barra visibles
+- âœ… FrmReportes grid muestra columnas (auto-generadas) Y header/barra visibles
+- âœ… FrmDashboard menÃº lateral visible Y contenido en el Ã¡rea restante
+- âœ… FrmOrdenDetalle header visible Y formulario en el Ã¡rea restante
+- âœ… FrmClienteDetalle info visible Y grid de dispositivos abajo
+- âœ… FrmPagoDetalle header visible Y grid de detalle visible
 
 ### Tests manuales (Bug #1)
 
-**Caso de prueba: Reporte "Órdenes por estado"**
-
 1. Login como `admin` / `admin123`
-2. Ir a Reportes
-3. Seleccionar "Órdenes por estado"
-4. Establecer rango: últimos 30 días
-5. Click "Generar"
-6. **Verificar:**
-   - ✅ La tabla muestra 3 columnas: Estado, Cantidad, Subtotal
-   - ✅ Hay al menos 1 fila de datos
-   - ✅ Los valores son coherentes (Cantidad > 0)
-
-Repetir para los 4 reportes.
-
-### Tests de regresión
-
-Verificar que la corrección **no afecta** otros formularios:
-
-- ✅ FrmClientes grid muestra columnas
-- ✅ FrmDispositivos grid muestra columnas
-- ✅ FrmOrdenes grid muestra columnas
-- ✅ FrmPagos grid muestra columnas
-- ✅ FrmTecnicos grid muestra columnas
-- ✅ FrmUsuarios grid muestra columnas
-
----
-
-## 📝 Cambios en README
-
-Actualizar sección de Bugs Conocidos:
-
-```markdown
-## 🐛 Bugs Conocidos
-
-### ~~Bug #1: Tabla de Reportes vacía~~ ✅ CORREGIDO
-
-**Estado:** Resuelto en commit `[hash]`
-**Solución:** Habilitado `AutoGenerateColumns = true` en FrmReportes
-```
+2. Ir a cada mÃ³dulo y verificar que el grid NO tape el header ni la barra de filtros
+3. En el Dashboard, verificar que el menÃº lateral sea visible y funcional
 
 ---
 
