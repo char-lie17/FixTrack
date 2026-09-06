@@ -332,14 +332,13 @@ Este proyecto es de código abierto para fines educativos. TecnoFix Solutions es
 
 ## 👥 Créditos
 
-- **Desarrollo inicial:** Equipo de desarrollo
-- **Revisión y documentación:** Equipo del proyecto
+- **Desarrollo inicial:** Henry Creel
+- **Revisión y documentación:** Carlos  (char-lie17)
 - **Empresa ficticia:** TecnoFix Solutions
 - **Contexto académico:** Proyecto de Programación de Aplicaciones de Escritorio
 
 ---
 
-## 📞 Contacto
 
 Para preguntas o soporte:
 - **GitHub Issues:** [char-lie17/FixTrack/issues](https://github.com/char-lie17/FixTrack/issues)
