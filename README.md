@@ -23,6 +23,7 @@ Aplicación de escritorio desarrollada en **C# .NET 10.0** con **Windows Forms**
 - **Dispositivos:** Registro de equipos asociados a clientes
 - **Órdenes de Servicio:** Flujo completo de 5 estados (Pendiente → En diagnóstico → En reparación → Listo → Entregado)
 - **Pagos:** Registro con validación de saldo, soporte para abonos parciales
+- **Historial de órdenes:** Auditoría de creación, estados, ediciones y pagos por orden
 - **Técnicos:** Gestión de personal (solo Administrador)
 - **Usuarios:** Control de acceso basado en roles (solo Administrador)
 - **Reportes:** 4 reportes con filtros de fecha y exportación a CSV
@@ -246,19 +247,20 @@ FixTrack/
 ├─────────────────────────────┤
 │   Datos (DAL)               │  ← ADO.NET, consultas SQL
 ├─────────────────────────────┤
-│   Base de Datos (SQL Server)│  ← 6 tablas relacionales
+│   Base de Datos (SQL Server)│  ← 7 tablas relacionales
 └─────────────────────────────┘
 ```
 
 ### Modelo de datos
 
-6 tablas principales:
+7 tablas principales:
 
 - **Clientes** (1) → (N) **Dispositivos**
 - **Dispositivos** (1) → (N) **OrdenesServicio**
 - **Tecnicos** (1) → (N) **OrdenesServicio**
 - **Tecnicos** (1) ← (0..1) **Usuarios** (relación 1:1 opcional)
 - **OrdenesServicio** (1) → (N) **Pagos**
+- **OrdenesServicio** (1) → (N) **HistorialOrdenes**
 
 Ver esquema completo en: `Contexto/05_base_de_datos.md`
 
@@ -295,7 +297,8 @@ Ejecuta `FrmTestConexion` (formulario incluido) para probar la conexión a la ba
 ### Próximas mejoras
 
 - [ ] Añadir pruebas automatizadas aisladas para reglas de negocio sin SQL Server
-- [ ] Evaluar una operación transaccional para pagos concurrentes
+- [x] Registrar historial de cambios de órdenes y pagos
+- [x] Proteger los pagos concurrentes con una operación transaccional
 - [ ] Documentar la decisión pendiente sobre `Dispositivos.Estado`
 
 - [ ] Panel de configuración para cambiar servidor SQL desde la UI
@@ -329,8 +332,8 @@ Este proyecto es de código abierto para fines educativos. TecnoFix Solutions es
 
 ## 👥 Créditos
 
-- **Desarrollo inicial:** Henry Creel
-- **Revisión y documentación:** Carlos Castillo (char-lie17)
+- **Desarrollo inicial:** Equipo de desarrollo
+- **Revisión y documentación:** Equipo del proyecto
 - **Empresa ficticia:** TecnoFix Solutions
 - **Contexto académico:** Proyecto de Programación de Aplicaciones de Escritorio
 
@@ -340,7 +343,6 @@ Este proyecto es de código abierto para fines educativos. TecnoFix Solutions es
 
 Para preguntas o soporte:
 - **GitHub Issues:** [char-lie17/FixTrack/issues](https://github.com/char-lie17/FixTrack/issues)
-- **Email:** carlosrenato05200@gmail.com
 
 ---
 
