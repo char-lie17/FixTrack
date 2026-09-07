@@ -252,6 +252,9 @@ public partial class FrmDashboard : Form
             case "usuarios":
                 AbrirFormularioHijo(new FrmUsuarios());
                 break;
+            case "reportes":
+                AbrirFormularioHijo(new FrmReportes());
+                break;
         }
     }
 
