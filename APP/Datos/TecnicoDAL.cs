@@ -1,174 +1,93 @@
-using System.Text;
 using FixTrack.Modelos;
-using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 
 namespace FixTrack.Datos;
 
+/// <summary>Acceso a datos de técnicos sobre EF Core (migrado desde ADO.NET).</summary>
 public static class TecnicoDAL
 {
-    private const string Columnas =
-        "TecnicoID, Nombre, Apellido, Telefono, Especialidad, Estado";
-
-    public static List<Tecnico> ObtenerTodos()
+    public static async Task<List<Tecnico>> ObtenerTodosAsync(CancellationToken ct = default)
     {
-        try
-        {
-            var lista = new List<Tecnico>();
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand($"SELECT {Columnas} FROM Tecnicos ORDER BY Nombre, Apellido", conn);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) lista.Add(Leer(reader));
-            return lista;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener la lista de técnicos.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await db.Tecnicos.AsNoTracking()
+            .OrderBy(t => t.Nombre).ThenBy(t => t.Apellido)
+            .ToListAsync(ct);
     }
 
-    public static List<Tecnico> ObtenerActivos()
+    public static async Task<List<Tecnico>> ObtenerActivosAsync(CancellationToken ct = default)
     {
-        try
-        {
-            var lista = new List<Tecnico>();
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand($"SELECT {Columnas} FROM Tecnicos WHERE Estado = 'Activo' ORDER BY Nombre, Apellido", conn);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) lista.Add(Leer(reader));
-            return lista;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener los técnicos activos.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await db.Tecnicos.AsNoTracking()
+            .Where(t => t.Estado == "Activo")
+            .OrderBy(t => t.Nombre).ThenBy(t => t.Apellido)
+            .ToListAsync(ct);
     }
 
-    public static List<Tecnico> Buscar(string? texto, string? estado)
+    public static async Task<List<Tecnico>> BuscarAsync(string? texto, string? estado, CancellationToken ct = default)
     {
-        try
-        {
-            var textoLimpio = texto?.Trim();
-            var esId = int.TryParse(textoLimpio, out var idBuscado);
+        var textoLimpio = texto?.Trim();
+        var esId = int.TryParse(textoLimpio, out var idBuscado);
 
-            var sql = new StringBuilder($"SELECT {Columnas} FROM Tecnicos WHERE 1 = 1");
-            if (esId)
-                sql.Append(" AND TecnicoID = @TecnicoIDBuscado");
-            else if (!string.IsNullOrWhiteSpace(textoLimpio))
-                sql.Append(" AND (Nombre LIKE @Texto OR Apellido LIKE @Texto OR (Nombre + ' ' + Apellido) LIKE @Texto OR ISNULL(Especialidad, '') LIKE @Texto)");
-            if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
-                sql.Append(" AND Estado = @Estado");
-            sql.Append(" ORDER BY Nombre, Apellido");
+        await using var db = FixTrackDb.Crear();
+        var query = db.Tecnicos.AsNoTracking().AsQueryable();
 
-            var lista = new List<Tecnico>();
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(sql.ToString(), conn);
-            if (esId)
-                cmd.Parameters.AddWithValue("@TecnicoIDBuscado", idBuscado);
-            else if (!string.IsNullOrWhiteSpace(textoLimpio))
-                cmd.Parameters.AddWithValue("@Texto", $"%{textoLimpio}%");
-            if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
-                cmd.Parameters.AddWithValue("@Estado", estado);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) lista.Add(Leer(reader));
-            return lista;
-        }
-        catch (SqlException ex)
+        if (esId)
+            query = query.Where(t => t.TecnicoID == idBuscado);
+        else if (!string.IsNullOrWhiteSpace(textoLimpio))
         {
-            throw new ApplicationException("Error al buscar técnicos.", ex);
+            var t = $"%{textoLimpio}%";
+            query = query.Where(x => EF.Functions.Like(x.Nombre, t)
+                                  || EF.Functions.Like(x.Apellido, t)
+                                  || EF.Functions.Like(x.Nombre + " " + x.Apellido, t)
+                                  || EF.Functions.Like(x.Especialidad ?? "", t));
         }
+        if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
+            query = query.Where(t => t.Estado == estado);
+
+        return await query
+            .OrderBy(t => t.Nombre).ThenBy(t => t.Apellido)
+            .ToListAsync(ct);
     }
 
-    public static Tecnico? ObtenerPorId(int id)
+    public static async Task<Tecnico?> ObtenerPorIdAsync(int id, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand($"SELECT {Columnas} FROM Tecnicos WHERE TecnicoID = @TecnicoID", conn);
-            cmd.Parameters.AddWithValue("@TecnicoID", id);
-            using var reader = cmd.ExecuteReader();
-            return reader.Read() ? Leer(reader) : null;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener el técnico.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await db.Tecnicos.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.TecnicoID == id, ct);
     }
 
-    public static int Insertar(Tecnico t)
+    public static async Task<int> InsertarAsync(Tecnico t, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(@"
-INSERT INTO Tecnicos (Nombre, Apellido, Telefono, Especialidad, Estado)
-VALUES (@Nombre, @Apellido, @Telefono, @Especialidad, 'Activo');
-SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
-            cmd.Parameters.AddWithValue("@Nombre", t.Nombre);
-            cmd.Parameters.AddWithValue("@Apellido", t.Apellido);
-            cmd.Parameters.AddWithValue("@Telefono", (object?)t.Telefono ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Especialidad", (object?)t.Especialidad ?? DBNull.Value);
-            return (int)cmd.ExecuteScalar();
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al registrar el técnico.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        t.Estado = "Activo";
+        db.Tecnicos.Add(t);
+        await db.SaveChangesAsync(ct);
+        return t.TecnicoID;
     }
 
-    public static bool Actualizar(Tecnico t)
+    public static async Task<bool> ActualizarAsync(Tecnico t, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(@"
-UPDATE Tecnicos SET Nombre = @Nombre, Apellido = @Apellido, Telefono = @Telefono,
-    Especialidad = @Especialidad
-WHERE TecnicoID = @TecnicoID", conn);
-            cmd.Parameters.AddWithValue("@Nombre", t.Nombre);
-            cmd.Parameters.AddWithValue("@Apellido", t.Apellido);
-            cmd.Parameters.AddWithValue("@Telefono", (object?)t.Telefono ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Especialidad", (object?)t.Especialidad ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@TecnicoID", t.TecnicoID);
-            return cmd.ExecuteNonQuery() > 0;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al actualizar el técnico.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        var existente = await db.Tecnicos
+            .FirstOrDefaultAsync(x => x.TecnicoID == t.TecnicoID, ct);
+        if (existente == null) return false;
+
+        existente.Nombre = t.Nombre;
+        existente.Apellido = t.Apellido;
+        existente.Telefono = t.Telefono;
+        existente.Especialidad = t.Especialidad;
+        await db.SaveChangesAsync(ct);
+        return true;
     }
 
-    public static bool CambiarEstado(int id)
+    /// <summary>Baja lógica: alterna Activo/Inactivo.</summary>
+    public static async Task<bool> CambiarEstadoAsync(int id, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(@"
-UPDATE Tecnicos SET Estado =
-    CASE WHEN Estado = 'Activo' THEN 'Inactivo' ELSE 'Activo' END
-WHERE TecnicoID = @TecnicoID", conn);
-            cmd.Parameters.AddWithValue("@TecnicoID", id);
-            return cmd.ExecuteNonQuery() > 0;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al cambiar el estado del técnico.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        var tecnico = await db.Tecnicos.FirstOrDefaultAsync(t => t.TecnicoID == id, ct);
+        if (tecnico == null) return false;
+        tecnico.Estado = tecnico.Estado == "Activo" ? "Inactivo" : "Activo";
+        await db.SaveChangesAsync(ct);
+        return true;
     }
-
-    private static Tecnico Leer(SqlDataReader r) => new()
-    {
-        TecnicoID = r.GetInt32(0),
-        Nombre = r.GetString(1),
-        Apellido = r.GetString(2),
-        Telefono = r.IsDBNull(3) ? null : r.GetString(3),
-        Especialidad = r.IsDBNull(4) ? null : r.GetString(4),
-        Estado = r.GetString(5)
-    };
 }

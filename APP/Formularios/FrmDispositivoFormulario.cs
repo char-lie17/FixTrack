@@ -12,6 +12,7 @@ public partial class FrmDispositivoFormulario : Form
     private readonly TextBox txtModelo = new();
     private readonly TextBox txtNumeroSerie = new();
     private readonly TextBox txtDescripcion = new();
+    private Button? _btnGuardar;
 
     public FrmDispositivoFormulario()
     {
@@ -42,7 +43,7 @@ public partial class FrmDispositivoFormulario : Form
         txtModelo.Text = dispositivo.Modelo ?? string.Empty;
         txtNumeroSerie.Text = dispositivo.NumeroSerie ?? string.Empty;
         txtDescripcion.Text = dispositivo.Descripcion ?? string.Empty;
-        SeleccionarCliente(dispositivo.ClienteID);
+        // La selección del cliente actual se aplica al terminar de cargar el combo (CargarClientesAsync).
     }
 
     private void BuildUi()
@@ -97,19 +98,38 @@ public partial class FrmDispositivoFormulario : Form
         Estilos.BotonPrincipal(btnGuardar);
         btnGuardar.Click += BtnGuardar_Click;
         btnPanel.Controls.Add(btnGuardar);
+        _btnGuardar = btnGuardar;
 
         AcceptButton = btnGuardar;
         CancelButton = btnCancelar;
 
-        // Cargar clientes en combo. Al registrar un dispositivo nuevo solo se ofrecen
-        // clientes activos (misma regla que ya se aplicaba a técnicos en FrmOrdenNueva).
-        // Al editar se usa ObtenerTodos() para no perder al cliente actual si fue
-        // desactivado después de registrar el dispositivo (hallazgo g de la auditoría).
-        var clientes = _dispositivo == null ? ClienteDAL.ObtenerActivos() : ClienteDAL.ObtenerTodos();
-        cboCliente.DataSource = clientes;
         cboCliente.DisplayMember = "NombreCompleto";
         cboCliente.ValueMember = "ClienteID";
         cboCliente.Dock = DockStyle.Fill;
+
+        // Cargar clientes en combo de forma asíncrona. Al registrar un dispositivo nuevo solo se
+        // ofrecen clientes activos (misma regla que ya se aplicaba a técnicos en FrmOrdenNueva).
+        // Al editar se usa ObtenerTodosAsync() para no perder al cliente actual si fue
+        // desactivado después de registrar el dispositivo (hallazgo g de la auditoría).
+        CargarClientesAsync();
+    }
+
+    private async void CargarClientesAsync()
+    {
+        try
+        {
+            var clientes = _dispositivo == null
+                ? await ClienteDAL.ObtenerActivosAsync()
+                : await ClienteDAL.ObtenerTodosAsync();
+            cboCliente.DataSource = clientes;
+            if (_dispositivo != null) SeleccionarCliente(_dispositivo.ClienteID);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"No se pudieron cargar los clientes.\n\n{ex.Message}",
+                "Dispositivos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void SeleccionarCliente(int clienteId)
@@ -146,7 +166,7 @@ public partial class FrmDispositivoFormulario : Form
         return row + 1;
     }
 
-    private void BtnGuardar_Click(object? sender, EventArgs e)
+    private async void BtnGuardar_Click(object? sender, EventArgs e)
     {
         if (cboCliente.SelectedValue == null)
         {
@@ -166,36 +186,42 @@ public partial class FrmDispositivoFormulario : Form
         var serie = txtNumeroSerie.Text.Trim();
         var desc = txtDescripcion.Text.Trim();
 
-        if (_dispositivo == null)
+        if (_btnGuardar != null) _btnGuardar.Enabled = false;
+        try
         {
-            var ok = UIHelper.EjecutarSeguro(this, () =>
+            if (_dispositivo == null)
             {
-                DispositivoDAL.Insertar(new Dispositivo
-                {
-                    ClienteID = clienteId,
-                    Tipo = tipo,
-                    Marca = string.IsNullOrWhiteSpace(marca) ? null : marca,
-                    Modelo = string.IsNullOrWhiteSpace(modelo) ? null : modelo,
-                    NumeroSerie = string.IsNullOrWhiteSpace(serie) ? null : serie,
-                    Descripcion = string.IsNullOrWhiteSpace(desc) ? null : desc
-                });
-            }, "Dispositivos");
-            if (!ok) return;
-            MessageBox.Show(this, "Dispositivo registrado exitosamente.", "Dispositivos", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        else
-        {
-            _dispositivo.ClienteID = clienteId;
-            _dispositivo.Tipo = tipo;
-            _dispositivo.Marca = string.IsNullOrWhiteSpace(marca) ? null : marca;
-            _dispositivo.Modelo = string.IsNullOrWhiteSpace(modelo) ? null : modelo;
-            _dispositivo.NumeroSerie = string.IsNullOrWhiteSpace(serie) ? null : serie;
-            _dispositivo.Descripcion = string.IsNullOrWhiteSpace(desc) ? null : desc;
-            var ok = UIHelper.EjecutarSeguro(this, () => DispositivoDAL.Actualizar(_dispositivo!), "Dispositivos");
-            if (!ok) return;
-            MessageBox.Show(this, "Dispositivo modificado exitosamente.", "Dispositivos", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
+                var ok = await UIHelper.EjecutarSeguroAsync(this, () =>
+                    DispositivoDAL.InsertarAsync(new Dispositivo
+                    {
+                        ClienteID = clienteId,
+                        Tipo = tipo,
+                        Marca = string.IsNullOrWhiteSpace(marca) ? null : marca,
+                        Modelo = string.IsNullOrWhiteSpace(modelo) ? null : modelo,
+                        NumeroSerie = string.IsNullOrWhiteSpace(serie) ? null : serie,
+                        Descripcion = string.IsNullOrWhiteSpace(desc) ? null : desc
+                    }), "Dispositivos");
+                if (!ok) return;
+                MessageBox.Show(this, "Dispositivo registrado exitosamente.", "Dispositivos", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else
+            {
+                _dispositivo.ClienteID = clienteId;
+                _dispositivo.Tipo = tipo;
+                _dispositivo.Marca = string.IsNullOrWhiteSpace(marca) ? null : marca;
+                _dispositivo.Modelo = string.IsNullOrWhiteSpace(modelo) ? null : modelo;
+                _dispositivo.NumeroSerie = string.IsNullOrWhiteSpace(serie) ? null : serie;
+                _dispositivo.Descripcion = string.IsNullOrWhiteSpace(desc) ? null : desc;
+                var ok = await UIHelper.EjecutarSeguroAsync(this, () => DispositivoDAL.ActualizarAsync(_dispositivo!), "Dispositivos");
+                if (!ok) return;
+                MessageBox.Show(this, "Dispositivo modificado exitosamente.", "Dispositivos", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
 
-        DialogResult = DialogResult.OK;
+            DialogResult = DialogResult.OK;
+        }
+        finally
+        {
+            if (_btnGuardar != null) _btnGuardar.Enabled = true;
+        }
     }
 }

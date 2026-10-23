@@ -13,6 +13,7 @@ public partial class FrmPagos : Form
     private readonly Button btnNuevo = new();
     private readonly Button btnDetalle = new();
     private readonly DataGridView grid = new();
+    private CancellationTokenSource? _ctsBusqueda;
 
     public FrmPagos()
     {
@@ -24,6 +25,7 @@ public partial class FrmPagos : Form
         }
         Text = "Pagos";
         InitializeUi();
+        FormClosed += (_, _) => _ctsBusqueda?.Cancel();
         CargarDatos();
     }
 
@@ -153,16 +155,40 @@ public partial class FrmPagos : Form
         Controls.Add(header);
     }
 
-    private void CargarDatos()
+    /// <summary>Carga asíncrona con cancelación de la búsqueda anterior (evita respuestas viejas).</summary>
+    private async void CargarDatos()
     {
-        UIHelper.EjecutarSeguro(this, () =>
+        _ctsBusqueda?.Cancel();
+        _ctsBusqueda?.Dispose();
+        _ctsBusqueda = new CancellationTokenSource();
+        var token = _ctsBusqueda.Token;
+
+        grid.UseWaitCursor = true;
+        try
         {
             DateTime? desde = dtDesde.Checked ? dtDesde.Value.Date : null;
             DateTime? hasta = dtHasta.Checked ? dtHasta.Value.Date : null;
             var metodo = cboMetodo.SelectedItem?.ToString();
-            grid.DataSource = PagoDAL.Buscar(metodo, desde, hasta, txtBuscar.Text.Trim());
+            if (metodo == "Todos") metodo = null;
+
+            var lista = await PagoDAL.BuscarAsync(metodo, desde, hasta, txtBuscar.Text.Trim(), token);
+            token.ThrowIfCancellationRequested();
+            grid.DataSource = lista;
             grid.ClearSelection();
-        }, "Pagos");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"No se pudo completar la operación.\n\n{ex.Message}",
+                "Pagos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            grid.UseWaitCursor = false;
+        }
     }
 
     private int? PagoSeleccionado()

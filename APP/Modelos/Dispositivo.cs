@@ -11,6 +11,9 @@ public class Dispositivo
     public string? Descripcion { get; set; }
     public DateTime FechaRegistro { get; set; }
 
+    // Navegación EF Core (FK ClienteID). No genera columna nueva.
+    public Cliente? Cliente { get; set; }
+
     // Propiedad de visualización (JOIN con Clientes en las consultas de listado)
     public string ClienteNombre { get; set; } = string.Empty;
 

@@ -11,6 +11,9 @@ public class Cliente
     public DateTime FechaRegistro { get; set; }
     public string Estado { get; set; } = "Activo";
 
+    // Navegación EF Core (relación Clientes 1 — * Dispositivos). No genera columna nueva.
+    public ICollection<Dispositivo> Dispositivos { get; set; } = new List<Dispositivo>();
+
     // Ayuda para ComboBox
     public string NombreCompleto => $"{Nombre} {Apellido}";
 }

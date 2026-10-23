@@ -13,6 +13,7 @@ public partial class FrmOrdenes : Form
     private readonly Button btnNueva = new();
     private readonly Button btnVer = new();
     private readonly DataGridView grid = new();
+    private CancellationTokenSource? _ctsBusqueda;
 
     public FrmOrdenes(bool soloTecnicoActual = false)
     {
@@ -25,6 +26,7 @@ public partial class FrmOrdenes : Form
         _soloTecnicoActual = soloTecnicoActual;
         Text = soloTecnicoActual ? "Mis ordenes" : "Ordenes de servicio";
         InitializeUi();
+        FormClosed += (_, _) => _ctsBusqueda?.Cancel();
         CargarDatos();
     }
 
@@ -160,24 +162,41 @@ public partial class FrmOrdenes : Form
     private static EstadoItem[] EstadoTodos() =>
         new[] { new EstadoItem("Todos", "Todos") }.Concat(EstadoOrdenTexto.ItemsParaCombo).ToArray();
 
-    private void CargarDatos()
+    /// <summary>Carga asíncrona con cancelación de la búsqueda anterior (evita respuestas viejas).</summary>
+    private async void CargarDatos()
     {
-        UIHelper.EjecutarSeguro(this, () =>
+        _ctsBusqueda?.Cancel();
+        _ctsBusqueda?.Dispose();
+        _ctsBusqueda = new CancellationTokenSource();
+        var token = _ctsBusqueda.Token;
+
+        grid.UseWaitCursor = true;
+        try
         {
             DateTime? desde = dtDesde.Checked ? dtDesde.Value.Date : null;
             DateTime? hasta = dtHasta.Checked ? dtHasta.Value.Date : null;
             var estado = (cboEstado.SelectedItem as EstadoItem)?.Valor;
 
-            if (_soloTecnicoActual && Sesion.TecnicoID.HasValue)
-            {
-                grid.DataSource = OrdenServicioDAL.Buscar(txtBuscar.Text.Trim(), estado, desde, hasta, Sesion.TecnicoID.Value);
-            }
-            else
-            {
-                grid.DataSource = OrdenServicioDAL.Buscar(txtBuscar.Text.Trim(), estado, desde, hasta);
-            }
+            var lista = _soloTecnicoActual && Sesion.TecnicoID.HasValue
+                ? await OrdenServicioDAL.BuscarAsync(txtBuscar.Text.Trim(), estado, desde, hasta, Sesion.TecnicoID.Value, token)
+                : await OrdenServicioDAL.BuscarAsync(txtBuscar.Text.Trim(), estado, desde, hasta, null, token);
+            token.ThrowIfCancellationRequested();
+            grid.DataSource = lista;
             grid.ClearSelection();
-        }, "Ordenes");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"No se pudo completar la operación.\n\n{ex.Message}",
+                "Ordenes", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            grid.UseWaitCursor = false;
+        }
     }
 
     private void BtnNueva_Click(object? sender, EventArgs e)

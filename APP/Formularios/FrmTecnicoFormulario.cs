@@ -14,6 +14,7 @@ public partial class FrmTecnicoFormulario : Form
     private readonly TextBox txtApellido = new();
     private readonly TextBox txtTelefono = new();
     private readonly TextBox txtEspecialidad = new();
+    private Button? _btnGuardar;
 
     public FrmTecnicoFormulario()
     {
@@ -95,6 +96,7 @@ public partial class FrmTecnicoFormulario : Form
         Estilos.BotonPrincipal(btnGuardar);
         btnGuardar.Click += BtnGuardar_Click;
         btnPanel.Controls.Add(btnGuardar);
+        _btnGuardar = btnGuardar;
 
         AcceptButton = btnGuardar;
         CancelButton = btnCancelar;
@@ -122,7 +124,7 @@ public partial class FrmTecnicoFormulario : Form
         return row + 1;
     }
 
-    private void BtnGuardar_Click(object? sender, EventArgs e)
+    private async void BtnGuardar_Click(object? sender, EventArgs e)
     {
         var nombre = txtNombre.Text.Trim();
         var apellido = txtApellido.Text.Trim();
@@ -135,32 +137,38 @@ public partial class FrmTecnicoFormulario : Form
             return;
         }
 
-        if (_tecnico == null)
+        if (_btnGuardar != null) _btnGuardar.Enabled = false;
+        try
         {
-            var ok = UIHelper.EjecutarSeguro(this, () =>
+            if (_tecnico == null)
             {
-                TecnicoDAL.Insertar(new Tecnico
-                {
-                    Nombre = nombre,
-                    Apellido = apellido,
-                    Telefono = string.IsNullOrWhiteSpace(telefono) ? null : telefono,
-                    Especialidad = string.IsNullOrWhiteSpace(especialidad) ? null : especialidad
-                });
-            }, "Técnicos");
-            if (!ok) return;
-            MessageBox.Show(this, "Técnico registrado exitosamente.", "Técnicos", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        else
-        {
-            _tecnico.Nombre = nombre;
-            _tecnico.Apellido = apellido;
-            _tecnico.Telefono = string.IsNullOrWhiteSpace(telefono) ? null : telefono;
-            _tecnico.Especialidad = string.IsNullOrWhiteSpace(especialidad) ? null : especialidad;
-            var ok = UIHelper.EjecutarSeguro(this, () => TecnicoDAL.Actualizar(_tecnico!), "Técnicos");
-            if (!ok) return;
-            MessageBox.Show(this, "Técnico modificado exitosamente.", "Técnicos", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
+                var ok = await UIHelper.EjecutarSeguroAsync(this, () =>
+                    TecnicoDAL.InsertarAsync(new Tecnico
+                    {
+                        Nombre = nombre,
+                        Apellido = apellido,
+                        Telefono = string.IsNullOrWhiteSpace(telefono) ? null : telefono,
+                        Especialidad = string.IsNullOrWhiteSpace(especialidad) ? null : especialidad
+                    }), "Técnicos");
+                if (!ok) return;
+                MessageBox.Show(this, "Técnico registrado exitosamente.", "Técnicos", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else
+            {
+                _tecnico.Nombre = nombre;
+                _tecnico.Apellido = apellido;
+                _tecnico.Telefono = string.IsNullOrWhiteSpace(telefono) ? null : telefono;
+                _tecnico.Especialidad = string.IsNullOrWhiteSpace(especialidad) ? null : especialidad;
+                var ok = await UIHelper.EjecutarSeguroAsync(this, () => TecnicoDAL.ActualizarAsync(_tecnico!), "Técnicos");
+                if (!ok) return;
+                MessageBox.Show(this, "Técnico modificado exitosamente.", "Técnicos", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
 
-        DialogResult = DialogResult.OK;
+            DialogResult = DialogResult.OK;
+        }
+        finally
+        {
+            if (_btnGuardar != null) _btnGuardar.Enabled = true;
+        }
     }
 }

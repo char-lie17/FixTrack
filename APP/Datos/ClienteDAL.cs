@@ -1,189 +1,104 @@
-using System.Text;
 using FixTrack.Modelos;
-using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 
 namespace FixTrack.Datos;
 
+/// <summary>Acceso a datos de clientes sobre EF Core (migrado desde ADO.NET).</summary>
 public static class ClienteDAL
 {
-    private const string Columnas =
-        "ClienteID, Nombre, Apellido, Telefono, Email, Direccion, FechaRegistro, Estado";
-
-    public static List<Cliente> ObtenerTodos()
+    public static async Task<List<Cliente>> ObtenerTodosAsync(CancellationToken ct = default)
     {
-        try
-        {
-            var lista = new List<Cliente>();
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand($"SELECT {Columnas} FROM Clientes ORDER BY Nombre, Apellido", conn);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) lista.Add(Leer(reader));
-            return lista;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener la lista de clientes.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await db.Clientes.AsNoTracking()
+            .OrderBy(c => c.Nombre).ThenBy(c => c.Apellido)
+            .ToListAsync(ct);
     }
 
     /// <summary>Solo clientes con Estado = 'Activo'. Usado al crear un dispositivo nuevo,
-    /// igual que TecnicoDAL.ObtenerActivos() al asignar técnico (hallazgo g de la auditoría:
-    /// antes se aplicaba esta regla a técnicos pero no a clientes).</summary>
-    public static List<Cliente> ObtenerActivos()
+    /// igual que TecnicoDAL.ObtenerActivosAsync() al asignar técnico (hallazgo g de la auditoría).</summary>
+    public static async Task<List<Cliente>> ObtenerActivosAsync(CancellationToken ct = default)
     {
-        try
-        {
-            var lista = new List<Cliente>();
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand($"SELECT {Columnas} FROM Clientes WHERE Estado = 'Activo' ORDER BY Nombre, Apellido", conn);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) lista.Add(Leer(reader));
-            return lista;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener los clientes activos.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await db.Clientes.AsNoTracking()
+            .Where(c => c.Estado == "Activo")
+            .OrderBy(c => c.Nombre).ThenBy(c => c.Apellido)
+            .ToListAsync(ct);
     }
 
-    public static List<Cliente> Buscar(string? texto, string? estado)
+    public static async Task<List<Cliente>> BuscarAsync(string? texto, string? estado, CancellationToken ct = default)
     {
-        try
+        var textoLimpio = texto?.Trim();
+        var esId = int.TryParse(textoLimpio, out var idBuscado);
+
+        await using var db = FixTrackDb.Crear();
+        var query = db.Clientes.AsNoTracking().AsQueryable();
+
+        if (esId)
         {
-            var textoLimpio = texto?.Trim();
-            var esId = int.TryParse(textoLimpio, out var idBuscado);
-
-            var sql = new StringBuilder($"SELECT {Columnas} FROM Clientes WHERE 1 = 1");
-            if (esId)
-            {
-                // El usuario escribió solo números: lo más intuitivo es que busque el ID exacto.
-                sql.Append(" AND ClienteID = @ClienteIDBuscado");
-            }
-            else if (!string.IsNullOrWhiteSpace(textoLimpio))
-            {
-                // Búsqueda por texto: nombre, apellido, nombre completo (nombre + apellido) o teléfono.
-                sql.Append(" AND (Nombre LIKE @Texto OR Apellido LIKE @Texto OR (Nombre + ' ' + Apellido) LIKE @Texto OR Telefono LIKE @Texto)");
-            }
-            if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
-                sql.Append(" AND Estado = @Estado");
-            sql.Append(" ORDER BY Nombre, Apellido");
-
-            var lista = new List<Cliente>();
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(sql.ToString(), conn);
-            if (esId)
-                cmd.Parameters.AddWithValue("@ClienteIDBuscado", idBuscado);
-            else if (!string.IsNullOrWhiteSpace(textoLimpio))
-                cmd.Parameters.AddWithValue("@Texto", $"%{textoLimpio}%");
-            if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
-                cmd.Parameters.AddWithValue("@Estado", estado);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) lista.Add(Leer(reader));
-            return lista;
+            // El usuario escribió solo números: lo más intuitivo es que busque el ID exacto.
+            query = query.Where(c => c.ClienteID == idBuscado);
         }
-        catch (SqlException ex)
+        else if (!string.IsNullOrWhiteSpace(textoLimpio))
         {
-            throw new ApplicationException("Error al buscar clientes.", ex);
-
+            var t = $"%{textoLimpio}%";
+            query = query.Where(c => EF.Functions.Like(c.Nombre, t)
+                                  || EF.Functions.Like(c.Apellido, t)
+                                  || EF.Functions.Like(c.Nombre + " " + c.Apellido, t)
+                                  || EF.Functions.Like(c.Telefono, t));
         }
+        if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
+            query = query.Where(c => c.Estado == estado);
+
+        return await query
+            .OrderBy(c => c.Nombre).ThenBy(c => c.Apellido)
+            .ToListAsync(ct);
     }
 
-    public static Cliente? ObtenerPorId(int id)
+    public static async Task<Cliente?> ObtenerPorIdAsync(int id, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand($"SELECT {Columnas} FROM Clientes WHERE ClienteID = @ClienteID", conn);
-            cmd.Parameters.AddWithValue("@ClienteID", id);
-            using var reader = cmd.ExecuteReader();
-            return reader.Read() ? Leer(reader) : null;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener el cliente.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await db.Clientes.AsNoTracking()
+            .FirstOrDefaultAsync(c => c.ClienteID == id, ct);
     }
 
-    public static int Insertar(Cliente c)
+    public static async Task<int> InsertarAsync(Cliente c, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(@"
-INSERT INTO Clientes (Nombre, Apellido, Telefono, Email, Direccion, Estado, FechaRegistro)
-VALUES (@Nombre, @Apellido, @Telefono, @Email, @Direccion, 'Activo', GETDATE());
-SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
-            cmd.Parameters.AddWithValue("@Nombre", c.Nombre);
-            cmd.Parameters.AddWithValue("@Apellido", c.Apellido);
-            cmd.Parameters.AddWithValue("@Telefono", c.Telefono);
-            cmd.Parameters.AddWithValue("@Email", (object?)c.Email ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Direccion", (object?)c.Direccion ?? DBNull.Value);
-            return (int)cmd.ExecuteScalar();
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al registrar el cliente.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        // FechaRegistro y Estado se asignan igual que en la versión ADO.NET (GETDATE() y 'Activo'
+        // quedan también como valores por defecto en BD por si se inserta fuera de esta capa).
+        c.FechaRegistro = DateTime.Now;
+        c.Estado = "Activo";
+        db.Clientes.Add(c);
+        await db.SaveChangesAsync(ct);
+        return c.ClienteID;
     }
 
-    public static bool Actualizar(Cliente c)
+    public static async Task<bool> ActualizarAsync(Cliente c, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(@"
-UPDATE Clientes SET Nombre = @Nombre, Apellido = @Apellido, Telefono = @Telefono,
-    Email = @Email, Direccion = @Direccion
-WHERE ClienteID = @ClienteID", conn);
-            cmd.Parameters.AddWithValue("@Nombre", c.Nombre);
-            cmd.Parameters.AddWithValue("@Apellido", c.Apellido);
-            cmd.Parameters.AddWithValue("@Telefono", c.Telefono);
-            cmd.Parameters.AddWithValue("@Email", (object?)c.Email ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Direccion", (object?)c.Direccion ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@ClienteID", c.ClienteID);
-            return cmd.ExecuteNonQuery() > 0;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al actualizar el cliente.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        var existente = await db.Clientes
+            .FirstOrDefaultAsync(x => x.ClienteID == c.ClienteID, ct);
+        if (existente == null) return false;
+
+        existente.Nombre = c.Nombre;
+        existente.Apellido = c.Apellido;
+        existente.Telefono = c.Telefono;
+        existente.Email = c.Email;
+        existente.Direccion = c.Direccion;
+        // Estado y FechaRegistro no se tocan: la edición conserva los valores de BD
+        // (mismo comportamiento que el UPDATE anterior de ADO.NET).
+        await db.SaveChangesAsync(ct);
+        return true;
     }
 
     /// <summary>Baja lógica: alterna Activo/Inactivo.</summary>
-    public static bool CambiarEstado(int id)
+    public static async Task<bool> CambiarEstadoAsync(int id, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(@"
-UPDATE Clientes SET Estado =
-    CASE WHEN Estado = 'Activo' THEN 'Inactivo' ELSE 'Activo' END
-WHERE ClienteID = @ClienteID", conn);
-            cmd.Parameters.AddWithValue("@ClienteID", id);
-            return cmd.ExecuteNonQuery() > 0;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al cambiar el estado del cliente.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        var cliente = await db.Clientes.FirstOrDefaultAsync(c => c.ClienteID == id, ct);
+        if (cliente == null) return false;
+        cliente.Estado = cliente.Estado == "Activo" ? "Inactivo" : "Activo";
+        await db.SaveChangesAsync(ct);
+        return true;
     }
-
-    private static Cliente Leer(SqlDataReader r) => new()
-    {
-        ClienteID = r.GetInt32(0),
-        Nombre = r.GetString(1),
-        Apellido = r.GetString(2),
-        Telefono = r.GetString(3),
-        Email = r.IsDBNull(4) ? null : r.GetString(4),
-        Direccion = r.IsDBNull(5) ? null : r.GetString(5),
-        FechaRegistro = r.GetDateTime(6),
-        Estado = r.GetString(7)
-    };
 }

@@ -1,211 +1,152 @@
-﻿using System.Data;
-using System.Text;
-using FixTrack.Modelos;
+﻿using FixTrack.Modelos;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 
 namespace FixTrack.Datos;
 
+/// <summary>
+/// Acceso a datos de pagos sobre EF Core (migrado desde ADO.NET).
+/// La escritura de pagos conserva el bloqueo de la orden y la validación de saldo
+/// dentro de una única transacción, igual que la versión original.
+/// </summary>
 public static class PagoDAL
 {
-    private const string SelectConJoin = @"
-SELECT p.PagoID, p.OrdenID, p.FechaPago, p.Monto, p.MetodoPago, p.Observaciones,
-       c.Nombre + ' ' + c.Apellido AS ClienteNombre
-FROM Pagos p
-INNER JOIN OrdenesServicio o ON p.OrdenID = o.OrdenID
-INNER JOIN Dispositivos d ON o.DispositivoID = d.DispositivoID
-INNER JOIN Clientes c ON d.ClienteID = c.ClienteID";
+    /// <summary>Proyección compartida: cliente dueño de la orden (una sola consulta, sin N+1).</summary>
+    private static IQueryable<Pago> Proyectar(IQueryable<Pago> query) =>
+        query.Select(p => new Pago
+        {
+            PagoID = p.PagoID,
+            OrdenID = p.OrdenID,
+            FechaPago = p.FechaPago,
+            Monto = p.Monto,
+            MetodoPago = p.MetodoPago,
+            Observaciones = p.Observaciones,
+            ClienteNombre = p.Orden.Dispositivo.Cliente.Nombre + " " + p.Orden.Dispositivo.Cliente.Apellido
+        });
 
-    public static List<Pago> ObtenerTodos()
+    public static Task<List<Pago>> ObtenerTodosAsync(CancellationToken ct = default)
+        => BuscarAsync(null, null, null, null, ct);
+
+    public static async Task<List<Pago>> BuscarAsync(string? metodo, DateTime? desde, DateTime? hasta,
+        string? texto, CancellationToken ct = default)
     {
-        try
+        var textoLimpio = texto?.Trim();
+        var esId = int.TryParse(textoLimpio, out var idBuscado);
+
+        await using var db = FixTrackDb.Crear();
+        var query = db.Pagos.AsNoTracking();
+
+        if (!string.IsNullOrWhiteSpace(metodo) && metodo != "Todos")
+            query = query.Where(p => p.MetodoPago == metodo);
+        if (desde.HasValue)
+            query = query.Where(p => p.FechaPago >= desde.Value);
+        if (hasta.HasValue)
+            query = query.Where(p => p.FechaPago < hasta.Value.AddDays(1));
+        if (esId)
+            query = query.Where(p => p.OrdenID == idBuscado);
+        else if (!string.IsNullOrWhiteSpace(textoLimpio))
         {
-            return Buscar(null, null, null, null);
+            var t = $"%{textoLimpio}%";
+            query = query.Where(p => EF.Functions.Like(p.Orden.Dispositivo.Cliente.Nombre, t)
+                                  || EF.Functions.Like(p.Orden.Dispositivo.Cliente.Apellido, t)
+                                  || EF.Functions.Like(p.Orden.Dispositivo.Cliente.Nombre + " " + p.Orden.Dispositivo.Cliente.Apellido, t));
         }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener la lista de pagos.", ex);
-        }
+
+        return await Proyectar(query)
+            .OrderByDescending(p => p.FechaPago).ThenByDescending(p => p.PagoID)
+            .ToListAsync(ct);
     }
 
-    public static List<Pago> Buscar(string? metodo, DateTime? desde, DateTime? hasta, string? texto)
+    public static async Task<List<Pago>> ObtenerPorOrdenAsync(int ordenId, CancellationToken ct = default)
     {
-        try
-        {
-            var textoLimpio = texto?.Trim();
-            var esId = int.TryParse(textoLimpio, out var idBuscado);
-
-            var sql = new StringBuilder(SelectConJoin);
-            sql.Append(" WHERE 1 = 1");
-            if (!string.IsNullOrWhiteSpace(metodo) && metodo != "Todos")
-                sql.Append(" AND p.MetodoPago = @Metodo");
-            if (desde.HasValue)
-                sql.Append(" AND p.FechaPago >= @Desde");
-            if (hasta.HasValue)
-                sql.Append(" AND p.FechaPago < DATEADD(DAY, 1, @Hasta)");
-            if (esId)
-                sql.Append(" AND p.OrdenID = @OrdenIDBuscado");
-            else if (!string.IsNullOrWhiteSpace(textoLimpio))
-                sql.Append(" AND (c.Nombre LIKE @Texto OR c.Apellido LIKE @Texto OR (c.Nombre + ' ' + c.Apellido) LIKE @Texto)");
-            sql.Append(" ORDER BY p.FechaPago DESC, p.PagoID DESC");
-
-            var lista = new List<Pago>();
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(sql.ToString(), conn);
-            if (!string.IsNullOrWhiteSpace(metodo) && metodo != "Todos")
-                cmd.Parameters.AddWithValue("@Metodo", metodo);
-            if (desde.HasValue)
-                cmd.Parameters.AddWithValue("@Desde", desde.Value);
-            if (hasta.HasValue)
-                cmd.Parameters.AddWithValue("@Hasta", hasta.Value);
-            if (esId)
-                cmd.Parameters.AddWithValue("@OrdenIDBuscado", idBuscado);
-            else if (!string.IsNullOrWhiteSpace(textoLimpio))
-                cmd.Parameters.AddWithValue("@Texto", $"%{textoLimpio}%");
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) lista.Add(Leer(reader));
-            return lista;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al buscar pagos.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await Proyectar(db.Pagos.AsNoTracking().Where(p => p.OrdenID == ordenId))
+            .OrderBy(p => p.FechaPago).ThenBy(p => p.PagoID)
+            .ToListAsync(ct);
     }
 
-    public static List<Pago> ObtenerPorOrden(int ordenId)
+    public static async Task<Pago?> ObtenerPorIdAsync(int id, CancellationToken ct = default)
     {
-        try
-        {
-            var lista = new List<Pago>();
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(SelectConJoin + " WHERE p.OrdenID = @OrdenID ORDER BY p.FechaPago, p.PagoID", conn);
-            cmd.Parameters.AddWithValue("@OrdenID", ordenId);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) lista.Add(Leer(reader));
-            return lista;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener los pagos de la orden.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await Proyectar(db.Pagos.AsNoTracking())
+            .FirstOrDefaultAsync(p => p.PagoID == id, ct);
     }
 
-    public static Pago? ObtenerPorId(int id)
+    public static Task<int> InsertarAsync(Pago p, CancellationToken ct = default)
+        => RegistrarPagoSeguroAsync(p, ct);
+
+    /// <summary>
+    /// Valida el saldo e inserta el pago bloqueando la orden en una sola transacción.
+    /// La concurrencia entre pagos simultáneos se controla con el mismo bloqueo
+    /// UPDLOCK/HOLDLOCK que usaba la versión ADO.NET: dos pagos simultáneos sobre la
+    /// misma orden se serializan y ninguno puede exceder el saldo real.
+    /// </summary>
+    public static async Task<int> RegistrarPagoSeguroAsync(Pago p, CancellationToken ct = default)
     {
+        await using var db = FixTrackDb.Crear();
+        await using var tx = await db.Database
+            .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
+
+        // Bloqueo de la fila de la orden hasta confirmar la transacción (equivalente al
+        // SELECT ... WITH (UPDLOCK, HOLDLOCK) de la versión ADO.NET).
+        await db.Database.ExecuteSqlAsync(
+            $"SELECT 1 FROM OrdenesServicio WITH (UPDLOCK, HOLDLOCK) WHERE OrdenID = {p.OrdenID}",
+            ct);
+
+        var existe = await db.OrdenesServicio.AsNoTracking()
+            .AnyAsync(o => o.OrdenID == p.OrdenID, ct);
+        if (!existe) throw new ApplicationException("La orden seleccionada no existe.");
+
+        var costo = await db.OrdenesServicio.AsNoTracking()
+            .Where(o => o.OrdenID == p.OrdenID)
+            .Select(o => o.CostoServicio)
+            .FirstAsync(ct);
+
+        var totalPagado = await db.Pagos.AsNoTracking()
+            .Where(x => x.OrdenID == p.OrdenID)
+            .SumAsync(x => (decimal?)x.Monto, ct) ?? 0m;
+
+        var saldo = costo - totalPagado;
+        if (p.Monto <= 0 || p.Monto > saldo)
+            throw new ApplicationException($"El pago no puede exceder el saldo pendiente. Saldo disponible: {saldo:C2}.");
+
+        p.FechaPago = DateTime.Now;
+        db.Pagos.Add(p);
+        db.HistorialOrdenes.Add(new HistorialOrden
+        {
+            OrdenID = p.OrdenID,
+            UsuarioID = Sesion.UsuarioID > 0 ? Sesion.UsuarioID : null,
+            TipoCambio = "Pago",
+            CampoModificado = "Pago",
+            ValorNuevo = p.Monto.ToString("F2"),
+            Comentario = "Pago registrado",
+            FechaCambio = DateTime.Now
+        });
+
         try
         {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(SelectConJoin + " WHERE p.PagoID = @PagoID", conn);
-            cmd.Parameters.AddWithValue("@PagoID", id);
-            using var reader = cmd.ExecuteReader();
-            return reader.Read() ? Leer(reader) : null;
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
         }
-        catch (SqlException ex)
+        catch (DbUpdateException ex) when (ex.InnerException is SqlException { Number: 547 } or SqlException { Number: 515 })
         {
-            throw new ApplicationException("Error al obtener el pago.", ex);
+            await tx.RollbackAsync(ct);
+            throw new ApplicationException("Error al registrar el pago: monto o referencia de orden inválidos.", ex);
         }
-    }
-
-    public static int Insertar(Pago p)
-    {
-        return RegistrarPagoSeguro(p);
-    }
-
-    /// <summary>Valida el saldo e inserta el pago bloqueando la orden en una sola transacción.</summary>
-    public static int RegistrarPagoSeguro(Pago p)
-    {
-        try
+        catch
         {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var tx = conn.BeginTransaction();
-            try
-            {
-                decimal costo;
-                decimal totalPagado;
-                using (var saldoCmd = new SqlCommand(@"
-SELECT o.CostoServicio, ISNULL(SUM(p.Monto), 0)
-FROM OrdenesServicio o WITH (UPDLOCK, HOLDLOCK)
-LEFT JOIN Pagos p ON p.OrdenID = o.OrdenID
-WHERE o.OrdenID = @OrdenID
-GROUP BY o.CostoServicio", conn, tx))
-                {
-                    saldoCmd.Parameters.AddWithValue("@OrdenID", p.OrdenID);
-                    using var reader = saldoCmd.ExecuteReader();
-                    if (!reader.Read()) throw new ApplicationException("La orden seleccionada no existe.");
-                    costo = reader.GetDecimal(0);
-                    totalPagado = reader.GetDecimal(1);
-                }
-
-                var saldo = costo - totalPagado;
-                if (p.Monto <= 0 || p.Monto > saldo)
-                    throw new ApplicationException($"El pago no puede exceder el saldo pendiente. Saldo disponible: {saldo:C2}.");
-
-                int pagoId;
-                using (var cmd = new SqlCommand(@"
-INSERT INTO Pagos (OrdenID, FechaPago, Monto, MetodoPago, Observaciones)
-VALUES (@OrdenID, GETDATE(), @Monto, @MetodoPago, @Observaciones);
-SELECT CAST(SCOPE_IDENTITY() AS INT);", conn, tx))
-                {
-                    cmd.Parameters.AddWithValue("@OrdenID", p.OrdenID);
-                    cmd.Parameters.AddWithValue("@Monto", p.Monto);
-                    cmd.Parameters.AddWithValue("@MetodoPago", p.MetodoPago);
-                    cmd.Parameters.AddWithValue("@Observaciones", (object?)p.Observaciones ?? DBNull.Value);
-                    pagoId = (int)cmd.ExecuteScalar();
-                }
-
-                using (var historialCmd = new SqlCommand(@"
-INSERT INTO HistorialOrdenes (OrdenID, UsuarioID, TipoCambio, CampoModificado, ValorNuevo, Comentario)
-VALUES (@OrdenID, @UsuarioID, 'Pago', 'Pago', @ValorNuevo, 'Pago registrado')", conn, tx))
-                {
-                    historialCmd.Parameters.AddWithValue("@OrdenID", p.OrdenID);
-                    historialCmd.Parameters.AddWithValue("@UsuarioID", Sesion.UsuarioID > 0 ? Sesion.UsuarioID : DBNull.Value);
-                    historialCmd.Parameters.AddWithValue("@ValorNuevo", p.Monto.ToString("F2"));
-                    historialCmd.ExecuteNonQuery();
-                }
-
-                tx.Commit();
-                return pagoId;
-            }
-            catch
-            {
-                tx.Rollback();
-                throw;
-            }
+            await tx.RollbackAsync(ct);
+            throw;
         }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al registrar el pago.", ex);
-        }
+        return p.PagoID;
     }
 
     /// <summary>Total pagado acumulado de una orden (para mostrar saldo pendiente).</summary>
-    public static decimal ObtenerTotalPagado(int ordenId)
+    public static async Task<decimal> ObtenerTotalPagadoAsync(int ordenId, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand("SELECT ISNULL(SUM(Monto), 0) FROM Pagos WHERE OrdenID = @OrdenID", conn);
-            cmd.Parameters.AddWithValue("@OrdenID", ordenId);
-            return Convert.ToDecimal(cmd.ExecuteScalar());
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener el total pagado.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await db.Pagos.AsNoTracking()
+            .Where(p => p.OrdenID == ordenId)
+            .SumAsync(p => (decimal?)p.Monto, ct) ?? 0m;
     }
-
-    private static Pago Leer(SqlDataReader r) => new()
-    {
-        PagoID = r.GetInt32(0),
-        OrdenID = r.GetInt32(1),
-        FechaPago = r.GetDateTime(2),
-        Monto = r.GetDecimal(3),
-        MetodoPago = r.GetString(4),
-        Observaciones = r.IsDBNull(5) ? null : r.GetString(5),
-        ClienteNombre = r.GetString(6)
-    };
 }

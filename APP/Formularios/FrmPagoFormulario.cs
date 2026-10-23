@@ -16,6 +16,7 @@ public partial class FrmPagoFormulario : Form
     private readonly ComboBox cboMetodo = new();
     private readonly TextBox txtObservaciones = new();
     private readonly Label lblOrden = new();
+    private Button? _btnGuardar;
 
     public FrmPagoFormulario(int? ordenId = null)
     {
@@ -95,17 +96,17 @@ public partial class FrmPagoFormulario : Form
         Estilos.BotonPrincipal(btnGuardar);
         btnGuardar.Click += BtnGuardar_Click;
         btnPanel.Controls.Add(btnGuardar);
+        _btnGuardar = btnGuardar;
 
         AcceptButton = btnGuardar;
         CancelButton = btnCancelar;
 
         if (!_ordenId.HasValue)
         {
-            var ordenes = OrdenServicioDAL.Buscar(null, null, null, null);
-            cboOrden.DataSource = ordenes;
             cboOrden.DisplayMember = "DescripcionCombo";
             cboOrden.ValueMember = "OrdenID";
             cboOrden.Dock = DockStyle.Fill;
+            CargarOrdenesAsync();
         }
 
         cboMetodo.Items.AddRange(MetodoPagoTexto.Valores);
@@ -116,6 +117,20 @@ public partial class FrmPagoFormulario : Form
         numMonto.DecimalPlaces = 2;
         numMonto.ThousandsSeparator = true;
         numMonto.Dock = DockStyle.Fill;
+    }
+
+    private async void CargarOrdenesAsync()
+    {
+        try
+        {
+            cboOrden.DataSource = await OrdenServicioDAL.BuscarAsync(null, null, null, null);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"No se pudieron cargar las órdenes.\n\n{ex.Message}",
+                "Pagos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private static int AgregarFila(TableLayoutPanel layout, int row, string etiqueta, Control campo)
@@ -140,7 +155,7 @@ public partial class FrmPagoFormulario : Form
         return row + 1;
     }
 
-    private void BtnGuardar_Click(object? sender, EventArgs e)
+    private async void BtnGuardar_Click(object? sender, EventArgs e)
     {
         if (!_ordenId.HasValue && cboOrden.SelectedValue == null)
         {
@@ -163,14 +178,22 @@ public partial class FrmPagoFormulario : Form
             Observaciones = string.IsNullOrWhiteSpace(txtObservaciones.Text) ? null : txtObservaciones.Text.Trim()
         };
 
-        var ok = UIHelper.EjecutarSeguro(this, () =>
+        if (_btnGuardar != null) _btnGuardar.Enabled = false;
+        try
         {
-            var id = PagoDAL.RegistrarPagoSeguro(pago);
-            if (id <= 0) throw new ApplicationException("No se pudo registrar el pago.");
-        }, "Pagos");
-        if (!ok) return;
+            var ok = await UIHelper.EjecutarSeguroAsync(this, async () =>
+            {
+                var id = await PagoDAL.RegistrarPagoSeguroAsync(pago);
+                if (id <= 0) throw new ApplicationException("No se pudo registrar el pago.");
+            }, "Pagos");
+            if (!ok) return;
 
-        MessageBox.Show(this, "Pago registrado exitosamente.", "Pagos", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        DialogResult = DialogResult.OK;
+            MessageBox.Show(this, "Pago registrado exitosamente.", "Pagos", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            DialogResult = DialogResult.OK;
+        }
+        finally
+        {
+            if (_btnGuardar != null) _btnGuardar.Enabled = true;
+        }
     }
 }

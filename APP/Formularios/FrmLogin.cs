@@ -156,7 +156,7 @@ public partial class FrmLogin : Form
         AcceptButton = btnIngresar;
     }
 
-    private void BtnIngresar_Click(object? sender, EventArgs e)
+    private async void BtnIngresar_Click(object? sender, EventArgs e)
     {
         var usuario = txtUsuario.Text.Trim();
         var password = txtPassword.Text;
@@ -167,9 +167,11 @@ public partial class FrmLogin : Form
             return;
         }
 
+        var btn = AcceptButton as Button;
+        if (btn != null) btn.Enabled = false; // Evita doble envío mientras se autentica.
         try
         {
-            var u = UsuarioDAL.ObtenerPorNombreUsuario(usuario);
+            var u = await UsuarioDAL.ObtenerPorNombreUsuarioAsync(usuario);
             if (u == null || !Seguridad.Verificar(password, u.PasswordHash))
             {
                 lblMensaje.Text = "Credenciales inválidas.";
@@ -202,6 +204,10 @@ public partial class FrmLogin : Form
         catch (Exception)
         {
             lblMensaje.Text = "Error al conectar con la base de datos.";
+        }
+        finally
+        {
+            if (btn != null) btn.Enabled = true;
         }
     }
 

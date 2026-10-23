@@ -13,6 +13,7 @@ public partial class FrmOrdenNueva : Form
     private readonly CheckBox chkAbono = new();
     private readonly NumericUpDown numMontoAbono = new();
     private readonly ComboBox cboMetodo = new();
+    private Button? _btnGuardar;
 
     public FrmOrdenNueva()
     {
@@ -31,6 +32,7 @@ public partial class FrmOrdenNueva : Form
         BackColor = Color.White;
         Font = Estilos.Fuente(9);
         BuildUi();
+        CargarCombosAsync();
     }
 
     private void BuildUi()
@@ -90,23 +92,12 @@ public partial class FrmOrdenNueva : Form
         Estilos.BotonPrincipal(btnGuardar);
         btnGuardar.Click += BtnGuardar_Click;
         btnPanel.Controls.Add(btnGuardar);
+        _btnGuardar = btnGuardar;
 
         AcceptButton = btnGuardar;
         CancelButton = btnCancelar;
 
-        // Cargar datos
-        var dispositivos = DispositivoDAL.Buscar(null);
-        cboDispositivo.DataSource = dispositivos;
-        cboDispositivo.DisplayMember = "DescripcionCombo";
-        cboDispositivo.ValueMember = "DispositivoID";
-        cboDispositivo.Dock = DockStyle.Fill;
-
-        var tecnicos = TecnicoDAL.ObtenerActivos();
-        cboTecnico.Items.Add("Sin asignar");
-        foreach (var t in tecnicos) cboTecnico.Items.Add(t);
-        cboTecnico.DisplayMember = "NombreCompleto";
-        cboTecnico.SelectedIndex = 0;
-        cboTecnico.Dock = DockStyle.Fill;
+        // Los combos se cargan de forma asíncrona (CargarCombosAsync) para no bloquear la UI.
 
         numCosto.Maximum = 999999m;
         numCosto.DecimalPlaces = 2;
@@ -123,6 +114,30 @@ public partial class FrmOrdenNueva : Form
         cboMetodo.Dock = DockStyle.Fill;
 
         HabilitarAbono();
+    }
+
+    private async void CargarCombosAsync()
+    {
+        try
+        {
+            cboDispositivo.DisplayMember = "DescripcionCombo";
+            cboDispositivo.ValueMember = "DispositivoID";
+            cboDispositivo.Dock = DockStyle.Fill;
+            cboDispositivo.DataSource = await DispositivoDAL.BuscarAsync(null);
+
+            cboTecnico.Items.Add("Sin asignar");
+            var tecnicos = await TecnicoDAL.ObtenerActivosAsync();
+            foreach (var t in tecnicos) cboTecnico.Items.Add(t);
+            cboTecnico.DisplayMember = "NombreCompleto";
+            cboTecnico.SelectedIndex = 0;
+            cboTecnico.Dock = DockStyle.Fill;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"No se pudieron cargar los combos.\n\n{ex.Message}",
+                "Nueva orden", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private static int AgregarFila(TableLayoutPanel layout, int row, string etiqueta, Control campo)
@@ -153,7 +168,7 @@ public partial class FrmOrdenNueva : Form
         cboMetodo.Enabled = chkAbono.Checked;
     }
 
-    private void BtnGuardar_Click(object? sender, EventArgs e)
+    private async void BtnGuardar_Click(object? sender, EventArgs e)
     {
         if (cboDispositivo.SelectedValue == null)
         {
@@ -192,27 +207,35 @@ public partial class FrmOrdenNueva : Form
             Observaciones = string.IsNullOrWhiteSpace(txtObservaciones.Text) ? null : txtObservaciones.Text.Trim()
         };
 
-        var resultado = false;
-        if (chkAbono.Checked)
+        if (_btnGuardar != null) _btnGuardar.Enabled = false;
+        try
         {
-            var pago = new Pago
+            var resultado = false;
+            if (chkAbono.Checked)
             {
-                Monto = numMontoAbono.Value,
-                MetodoPago = cboMetodo.SelectedItem?.ToString() ?? "Efectivo"
-            };
-            resultado = UIHelper.EjecutarSeguro(this, () => OrdenServicioDAL.InsertarConPagoInicial(orden, pago), "Ordenes");
-        }
-        else
-        {
-            resultado = UIHelper.EjecutarSeguro(this, () => OrdenServicioDAL.Insertar(orden), "Ordenes");
-        }
+                var pago = new Pago
+                {
+                    Monto = numMontoAbono.Value,
+                    MetodoPago = cboMetodo.SelectedItem?.ToString() ?? "Efectivo"
+                };
+                resultado = await UIHelper.EjecutarSeguroAsync(this, () => OrdenServicioDAL.InsertarConPagoInicialAsync(orden, pago), "Ordenes");
+            }
+            else
+            {
+                resultado = await UIHelper.EjecutarSeguroAsync(this, () => OrdenServicioDAL.InsertarAsync(orden), "Ordenes");
+            }
 
-        if (resultado)
+            if (resultado)
+            {
+                MessageBox.Show(this, chkAbono.Checked
+                    ? "Orden registrada con abono inicial exitosamente."
+                    : "Orden registrada exitosamente.", "Ordenes", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                DialogResult = DialogResult.OK;
+            }
+        }
+        finally
         {
-            MessageBox.Show(this, chkAbono.Checked
-                ? "Orden registrada con abono inicial exitosamente."
-                : "Orden registrada exitosamente.", "Ordenes", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            DialogResult = DialogResult.OK;
+            if (_btnGuardar != null) _btnGuardar.Enabled = true;
         }
     }
 }

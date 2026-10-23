@@ -283,10 +283,11 @@ public partial class FrmDashboard : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 5,
+            RowCount = 6,
             Padding = new Padding(4, 4, 4, 4),
             Margin = Padding.Empty
         };
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 5F));
@@ -313,69 +314,18 @@ public partial class FrmDashboard : Form
         };
         layout.Controls.Add(metricasPanel, 0, 1);
 
-        Dictionary<string, int>? conteos = null;
-        var metricasOk = UIHelper.EjecutarSeguro(this, () =>
+        // IProgress<string> informa las etapas reales de esta carga (2 consultas secuenciales)
+        // sin barras de progreso artificiales: solo un indicador de estado textual.
+        var lblEstadoCarga = new Label
         {
-            conteos = Sesion.EsTecnico && Sesion.TecnicoID.HasValue
-                ? OrdenServicioDAL.ObtenerConteoPorEstado(Sesion.TecnicoID.Value)
-                : OrdenServicioDAL.ObtenerConteoPorEstado();
-        }, "Ordenes");
-        if (!metricasOk || conteos == null)
-        {
-            var lblSinDatos = new Label
-            {
-                Text = "No se pudieron cargar las métricas.",
-                Font = Estilos.Fuente(10),
-                ForeColor = Estilos.GrisMedio,
-                AutoSize = true,
-                Margin = new Padding(0, 0, 0, 16)
-            };
-            metricasPanel.Controls.Add(lblSinDatos);
-        }
-        else
-        {
-            var metricas = new (string Etiqueta, int Valor, Color Color)[]
-            {
-                ("Pendientes", conteos["Pendiente"], Estilos.Pendiente),
-                ("En diagnóstico", conteos["En diagnostico"], Estilos.EnDiagnostico),
-                ("En reparación", conteos["En reparacion"], Estilos.EnReparacion),
-                ("Listos", conteos["Listo"], Estilos.Listo),
-                ("Entregados", conteos["Entregado"], Estilos.Entregado)
-            };
-
-            foreach (var (etiqueta, valor, color) in metricas)
-            {
-                var tarjeta = new Panel
-                {
-                    Size = new Size(160, 96),
-                    BackColor = Color.White,
-                    BorderStyle = BorderStyle.FixedSingle,
-                    Margin = new Padding(0, 0, 12, 0)
-                };
-                var lblValor = new Label
-                {
-                    Text = valor.ToString(),
-                    Font = Estilos.Fuente(22, FontStyle.Bold),
-                    ForeColor = color,
-                    AutoSize = false,
-                    TextAlign = ContentAlignment.MiddleCenter,
-                    Dock = DockStyle.Top,
-                    Height = 52
-                };
-                var lblEtiqueta = new Label
-                {
-                    Text = etiqueta,
-                    Font = Estilos.Fuente(8.5f),
-                    ForeColor = Estilos.GrisMedio,
-                    AutoSize = false,
-                    TextAlign = ContentAlignment.MiddleCenter,
-                    Dock = DockStyle.Fill
-                };
-                tarjeta.Controls.Add(lblEtiqueta);
-                tarjeta.Controls.Add(lblValor);
-                metricasPanel.Controls.Add(tarjeta);
-            }
-        }
+            Text = string.Empty,
+            Font = Estilos.Fuente(8.5f),
+            ForeColor = Estilos.GrisMedio,
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 8)
+        };
+        layout.Controls.Add(lblEstadoCarga, 0, 2);
+        var progreso = new Progress<string>(etapa => lblEstadoCarga.Text = etapa);
 
         var lblRecientes = new Label
         {
@@ -385,10 +335,10 @@ public partial class FrmDashboard : Form
             AutoSize = true,
             Margin = new Padding(0, 8, 0, 8)
         };
-        layout.Controls.Add(lblRecientes, 0, 3);
+        layout.Controls.Add(lblRecientes, 0, 4);
 
         var gridPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 0, 0, 0) };
-        layout.Controls.Add(gridPanel, 0, 4);
+        layout.Controls.Add(gridPanel, 0, 5);
 
         var grid = new DataGridView
         {
@@ -411,22 +361,115 @@ public partial class FrmDashboard : Form
         grid.Columns.Add(Col("Estado", "Estado", 110));
         grid.Columns.Add(Col("Costo", "CostoServicio", 90));
         grid.CellFormatting += Grid_CellFormatting;
+        gridPanel.Controls.Add(grid);
 
-        UIHelper.EjecutarSeguro(this, () =>
+        CargarInicioAsync(grid, progreso, lblEstadoCarga);
+    }
+
+    private async void CargarInicioAsync(DataGridView grid, IProgress<string> progreso, Label lblEstadoCarga)
+    {
+        progreso.Report("Cargando métricas…");
+        var metricasOk = await UIHelper.EjecutarSeguroAsync(this, async () =>
         {
-            var recientes = Sesion.EsTecnico && Sesion.TecnicoID.HasValue
-                ? OrdenServicioDAL.ObtenerPorTecnico(Sesion.TecnicoID.Value)
-                    .OrderByDescending(o => o.FechaIngreso)
-                    .Take(10)
-                    .ToList()
-                : OrdenServicioDAL.ObtenerTodos()
-                    .OrderByDescending(o => o.FechaIngreso)
-                    .Take(10)
-                    .ToList();
-            grid.DataSource = recientes;
+            Dictionary<string, int> conteos;
+            if (Sesion.EsTecnico && Sesion.TecnicoID.HasValue)
+                conteos = await OrdenServicioDAL.ObtenerConteoPorEstadoAsync(Sesion.TecnicoID.Value);
+            else
+                conteos = await OrdenServicioDAL.ObtenerConteoPorEstadoAsync();
+            MostrarMetricas(grid, conteos);
         }, "Ordenes");
 
-        gridPanel.Controls.Add(grid);
+        if (metricasOk)
+        {
+            progreso.Report("Cargando órdenes recientes…");
+            await UIHelper.EjecutarSeguroAsync(this, async () =>
+            {
+                List<OrdenServicio> recientes;
+                if (Sesion.EsTecnico && Sesion.TecnicoID.HasValue)
+                    recientes = (await OrdenServicioDAL.ObtenerPorTecnicoAsync(Sesion.TecnicoID.Value))
+                        .OrderByDescending(o => o.FechaIngreso)
+                        .Take(10)
+                        .ToList();
+                else
+                    recientes = (await OrdenServicioDAL.ObtenerTodosAsync())
+                        .OrderByDescending(o => o.FechaIngreso)
+                        .Take(10)
+                        .ToList();
+                grid.DataSource = recientes;
+            }, "Ordenes");
+        }
+        else
+        {
+            MostrarErrorMetricas(grid);
+        }
+        progreso.Report(string.Empty);
+    }
+
+    private void MostrarMetricas(DataGridView grid, Dictionary<string, int> conteos)
+    {
+        // Localización del panel de métricas a partir de la grilla (grid -> gridPanel -> layout).
+        var layout = grid.Parent?.Parent as TableLayoutPanel;
+        var metricasPanelEncontrado = layout?.Controls.Count > 1 ? layout.GetControlFromPosition(0, 1) as FlowLayoutPanel : null;
+        if (metricasPanelEncontrado == null) return;
+
+        metricasPanelEncontrado.Controls.Clear();
+        var metricas = new (string Etiqueta, int Valor, Color Color)[]
+        {
+            ("Pendientes", conteos["Pendiente"], Estilos.Pendiente),
+            ("En diagnóstico", conteos["En diagnostico"], Estilos.EnDiagnostico),
+            ("En reparación", conteos["En reparacion"], Estilos.EnReparacion),
+            ("Listos", conteos["Listo"], Estilos.Listo),
+            ("Entregados", conteos["Entregado"], Estilos.Entregado)
+        };
+
+        foreach (var (etiqueta, valor, color) in metricas)
+        {
+            var tarjeta = new Panel
+            {
+                Size = new Size(160, 96),
+                BackColor = Color.White,
+                BorderStyle = BorderStyle.FixedSingle,
+                Margin = new Padding(0, 0, 12, 0)
+            };
+            var lblValor = new Label
+            {
+                Text = valor.ToString(),
+                Font = Estilos.Fuente(22, FontStyle.Bold),
+                ForeColor = color,
+                AutoSize = false,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Dock = DockStyle.Top,
+                Height = 52
+            };
+            var lblEtiqueta = new Label
+            {
+                Text = etiqueta,
+                Font = Estilos.Fuente(8.5f),
+                ForeColor = Estilos.GrisMedio,
+                AutoSize = false,
+                TextAlign = ContentAlignment.MiddleCenter,
+                Dock = DockStyle.Fill
+            };
+            tarjeta.Controls.Add(lblEtiqueta);
+            tarjeta.Controls.Add(lblValor);
+            metricasPanelEncontrado.Controls.Add(tarjeta);
+        }
+    }
+
+    private void MostrarErrorMetricas(DataGridView grid)
+    {
+        var layout = grid.Parent?.Parent as TableLayoutPanel;
+        var metricasPanelEncontrado = layout?.Controls.Count > 1 ? layout.GetControlFromPosition(0, 1) as FlowLayoutPanel : null;
+        if (metricasPanelEncontrado == null) return;
+        metricasPanelEncontrado.Controls.Clear();
+        metricasPanelEncontrado.Controls.Add(new Label
+        {
+            Text = "No se pudieron cargar las métricas.",
+            Font = Estilos.Fuente(10),
+            ForeColor = Estilos.GrisMedio,
+            AutoSize = true,
+            Margin = new Padding(0, 0, 0, 16)
+        });
     }
 
     private static DataGridViewTextBoxColumn Col(string cabecera, string propiedad, int ancho)

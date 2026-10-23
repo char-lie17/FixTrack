@@ -16,6 +16,7 @@ public partial class FrmClientes : Form
     private readonly Button btnEstado = new();
     private readonly Button btnDetalle = new();
     private readonly DataGridView grid = new();
+    private CancellationTokenSource? _ctsBusqueda;
 
     public FrmClientes()
     {
@@ -27,6 +28,7 @@ public partial class FrmClientes : Form
         }
         Text = "Clientes";
         InitializeUi();
+        FormClosed += (_, _) => _ctsBusqueda?.Cancel();
         CargarDatos();
     }
 
@@ -150,20 +152,47 @@ public partial class FrmClientes : Form
         Controls.Add(header);
     }
 
-    private void CargarDatos()
+    /// <summary>
+    /// Carga el listado de forma asíncrona. Cada búsqueda cancela a la anterior
+    /// (CancellationToken), de modo que una respuesta vieja nunca pisa a la más reciente.
+    /// </summary>
+    private async void CargarDatos()
     {
-        UIHelper.EjecutarSeguro(this, () =>
+        _ctsBusqueda?.Cancel();
+        _ctsBusqueda?.Dispose();
+        _ctsBusqueda = new CancellationTokenSource();
+        var token = _ctsBusqueda.Token;
+
+        grid.UseWaitCursor = true;
+        try
         {
-            grid.DataSource = ClienteDAL.Buscar(txtBuscar.Text.Trim(), cboEstado.SelectedItem?.ToString());
+            var lista = await ClienteDAL.BuscarAsync(
+                txtBuscar.Text.Trim(), cboEstado.SelectedItem?.ToString(), token);
+            token.ThrowIfCancellationRequested();
+            grid.DataSource = lista;
             grid.ClearSelection();
-        }, "Clientes");
+        }
+        catch (OperationCanceledException)
+        {
+            // Búsqueda sustituida por otra más reciente o formulario cerrado: se ignora.
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"No se pudo completar la operación.\n\n{ex.Message}",
+                "Clientes", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            grid.UseWaitCursor = false;
+        }
     }
 
-    private Cliente? ClienteSeleccionado()
+    private async Task<Cliente?> ClienteSeleccionadoAsync()
     {
         if (grid.SelectedRows.Count == 0) return null;
         var id = Convert.ToInt32(grid.SelectedRows[0].Cells[0].Value);
-        return ClienteDAL.ObtenerPorId(id);
+        return await ClienteDAL.ObtenerPorIdAsync(id);
     }
 
     private void BtnNuevo_Click(object? sender, EventArgs e)
@@ -172,9 +201,9 @@ public partial class FrmClientes : Form
         if (f.ShowDialog(this) == DialogResult.OK) CargarDatos();
     }
 
-    private void BtnEditar_Click(object? sender, EventArgs e)
+    private async void BtnEditar_Click(object? sender, EventArgs e)
     {
-        var c = ClienteSeleccionado();
+        var c = await ClienteSeleccionadoAsync();
         if (c == null)
         {
             MessageBox.Show(this, "Seleccione un cliente.", "Clientes", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -184,9 +213,9 @@ public partial class FrmClientes : Form
         if (f.ShowDialog(this) == DialogResult.OK) CargarDatos();
     }
 
-    private void BtnEstado_Click(object? sender, EventArgs e)
+    private async void BtnEstado_Click(object? sender, EventArgs e)
     {
-        var c = ClienteSeleccionado();
+        var c = await ClienteSeleccionadoAsync();
         if (c == null)
         {
             MessageBox.Show(this, "Seleccione un cliente.", "Clientes", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -198,18 +227,18 @@ public partial class FrmClientes : Form
         {
             return;
         }
-        var ok = UIHelper.EjecutarSeguro(this, () =>
+        await UIHelper.EjecutarSeguroAsync(this, async () =>
         {
-            if (ClienteDAL.CambiarEstado(c.ClienteID))
+            if (await ClienteDAL.CambiarEstadoAsync(c.ClienteID))
             {
                 CargarDatos();
             }
         }, "Clientes");
     }
 
-    private void BtnDetalle_Click(object? sender, EventArgs e)
+    private async void BtnDetalle_Click(object? sender, EventArgs e)
     {
-        var c = ClienteSeleccionado();
+        var c = await ClienteSeleccionadoAsync();
         if (c == null)
         {
             MessageBox.Show(this, "Seleccione un cliente.", "Clientes", MessageBoxButtons.OK, MessageBoxIcon.Information);

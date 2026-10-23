@@ -9,6 +9,7 @@ public partial class FrmDispositivos : Form
     private readonly Button btnNuevo = new();
     private readonly Button btnEditar = new();
     private readonly DataGridView grid = new();
+    private CancellationTokenSource? _ctsBusqueda;
 
     public FrmDispositivos()
     {
@@ -20,6 +21,7 @@ public partial class FrmDispositivos : Form
         }
         Text = "Dispositivos";
         InitializeUi();
+        FormClosed += (_, _) => _ctsBusqueda?.Cancel();
         CargarDatos();
     }
 
@@ -100,13 +102,35 @@ public partial class FrmDispositivos : Form
         Controls.Add(header);
     }
 
-    private void CargarDatos()
+    /// <summary>Carga asíncrona con cancelación de la búsqueda anterior (evita respuestas viejas).</summary>
+    private async void CargarDatos()
     {
-        UIHelper.EjecutarSeguro(this, () =>
+        _ctsBusqueda?.Cancel();
+        _ctsBusqueda?.Dispose();
+        _ctsBusqueda = new CancellationTokenSource();
+        var token = _ctsBusqueda.Token;
+
+        grid.UseWaitCursor = true;
+        try
         {
-            grid.DataSource = DispositivoDAL.Buscar(txtBuscar.Text.Trim());
+            var lista = await DispositivoDAL.BuscarAsync(txtBuscar.Text.Trim(), token);
+            token.ThrowIfCancellationRequested();
+            grid.DataSource = lista;
             grid.ClearSelection();
-        }, "Dispositivos");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"No se pudo completar la operación.\n\n{ex.Message}",
+                "Dispositivos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            grid.UseWaitCursor = false;
+        }
     }
 
     private void BtnNuevo_Click(object? sender, EventArgs e)
@@ -115,7 +139,7 @@ public partial class FrmDispositivos : Form
         if (f.ShowDialog(this) == DialogResult.OK) CargarDatos();
     }
 
-    private void BtnEditar_Click(object? sender, EventArgs e)
+    private async void BtnEditar_Click(object? sender, EventArgs e)
     {
         if (grid.SelectedRows.Count == 0)
         {
@@ -123,7 +147,7 @@ public partial class FrmDispositivos : Form
             return;
         }
         var id = Convert.ToInt32(grid.SelectedRows[0].Cells[0].Value);
-        var d = DispositivoDAL.ObtenerPorId(id);
+        var d = await DispositivoDAL.ObtenerPorIdAsync(id);
         if (d == null)
         {
             MessageBox.Show(this, "El dispositivo ya no existe.", "Dispositivos", MessageBoxButtons.OK, MessageBoxIcon.Warning);

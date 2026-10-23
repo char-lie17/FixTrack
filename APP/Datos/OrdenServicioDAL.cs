@@ -1,380 +1,295 @@
-﻿using System.Data;
-using System.Text;
-using FixTrack.Modelos;
-using Microsoft.Data.SqlClient;
+﻿using FixTrack.Modelos;
+using Microsoft.EntityFrameworkCore;
 
 namespace FixTrack.Datos;
 
+/// <summary>
+/// Acceso a datos de órdenes de servicio sobre EF Core (migrado desde ADO.NET).
+/// Conserva las transacciones, el historial de cambios y la validación de transiciones de estado
+/// de la versión original.
+/// </summary>
 public static class OrdenServicioDAL
 {
-    private const string SelectConJoin = @"
-SELECT o.OrdenID, o.DispositivoID, o.TecnicoID, o.FechaIngreso, o.ProblemaReportado,
-       o.Diagnostico, o.TrabajoRealizado, o.Estado, o.CostoServicio, o.FechaFinalizacion,
-       o.Observaciones,
-       c.Nombre + ' ' + c.Apellido AS ClienteNombre,
-       d.Tipo + ' ' + ISNULL(d.Marca, '') + ' ' + ISNULL(d.Modelo, '') AS DispositivoTexto,
-       ISNULL(t.Nombre + ' ' + t.Apellido, 'Sin asignar') AS TecnicoNombre
-FROM OrdenesServicio o
-INNER JOIN Dispositivos d ON o.DispositivoID = d.DispositivoID
-INNER JOIN Clientes c ON d.ClienteID = c.ClienteID
-LEFT JOIN Tecnicos t ON o.TecnicoID = t.TecnicoID";
-
-    public static List<OrdenServicio> ObtenerTodos()
+    /// <summary>
+    /// Ordenación por flujo real de una orden (Pendiente → En diagnostico → En reparacion →
+    /// Listo → Entregado) en vez del orden alfabético (hallazgo f de la auditoría).
+    /// </summary>
+    private static int OrdenFlujo(string estado) => estado switch
     {
-        var lista = new List<OrdenServicio>();
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var cmd = new SqlCommand(SelectConJoin + " ORDER BY " + OrdenFlujoEstado + ", o.FechaIngreso DESC, o.OrdenID DESC", conn);
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read()) lista.Add(Leer(reader));
-        return lista;
+        "Pendiente" => 1,
+        "En diagnostico" => 2,
+        "En reparacion" => 3,
+        "Listo" => 4,
+        "Entregado" => 5,
+        _ => 6
+    };
+
+    /// <summary>Proyección compartida de listados: cliente, dispositivo y técnico en una sola consulta (sin N+1).</summary>
+    private static IQueryable<OrdenServicio> Proyectar(IQueryable<OrdenServicio> query) =>
+        query.Select(o => new OrdenServicio
+        {
+            OrdenID = o.OrdenID,
+            DispositivoID = o.DispositivoID,
+            TecnicoID = o.TecnicoID,
+            FechaIngreso = o.FechaIngreso,
+            ProblemaReportado = o.ProblemaReportado,
+            Diagnostico = o.Diagnostico,
+            TrabajoRealizado = o.TrabajoRealizado,
+            Estado = o.Estado,
+            CostoServicio = o.CostoServicio,
+            FechaFinalizacion = o.FechaFinalizacion,
+            Observaciones = o.Observaciones,
+            ClienteNombre = o.Dispositivo.Cliente.Nombre + " " + o.Dispositivo.Cliente.Apellido,
+            DispositivoTexto = o.Dispositivo.Tipo + " " + (o.Dispositivo.Marca ?? "") + " " + (o.Dispositivo.Modelo ?? ""),
+            TecnicoNombre = o.Tecnico != null ? o.Tecnico.Nombre + " " + o.Tecnico.Apellido : "Sin asignar"
+        });
+
+    public static async Task<List<OrdenServicio>> ObtenerTodosAsync(CancellationToken ct = default)
+    {
+        await using var db = FixTrackDb.Crear();
+        var lista = await Proyectar(db.OrdenesServicio.AsNoTracking()).ToListAsync(ct);
+        return lista.OrderBy(o => OrdenFlujo(o.Estado))
+            .ThenByDescending(o => o.FechaIngreso)
+            .ThenByDescending(o => o.OrdenID)
+            .ToList();
     }
 
-    /// <summary>
-    /// Expresión ORDER BY que respeta el flujo real de una orden (Pendiente → En diagnostico →
-    /// En reparacion → Listo → Entregado) en vez del orden alfabético por defecto de o.Estado
-    /// (hallazgo f de la auditoría).
-    /// </summary>
-    private const string OrdenFlujoEstado = @"CASE o.Estado
-        WHEN 'Pendiente' THEN 1
-        WHEN 'En diagnostico' THEN 2
-        WHEN 'En reparacion' THEN 3
-        WHEN 'Listo' THEN 4
-        WHEN 'Entregado' THEN 5
-        ELSE 6 END";
-
-    public static List<OrdenServicio> Buscar(string? texto, string? estado, DateTime? desde, DateTime? hasta, int? tecnicoId = null)
+    public static async Task<List<OrdenServicio>> BuscarAsync(string? texto, string? estado,
+        DateTime? desde, DateTime? hasta, int? tecnicoId = null, CancellationToken ct = default)
     {
         var textoLimpio = texto?.Trim();
         var esId = int.TryParse(textoLimpio, out var idBuscado);
 
-        var sql = new StringBuilder(SelectConJoin);
-        sql.Append(" WHERE 1 = 1");
+        await using var db = FixTrackDb.Crear();
+        var query = db.OrdenesServicio.AsNoTracking();
+
         if (esId)
         {
-            sql.Append(" AND o.OrdenID = @OrdenIDBuscado");
+            query = query.Where(o => o.OrdenID == idBuscado);
         }
         else if (!string.IsNullOrWhiteSpace(textoLimpio))
         {
-            sql.Append(" AND (c.Nombre LIKE @Texto OR c.Apellido LIKE @Texto OR (c.Nombre + ' ' + c.Apellido) LIKE @Texto OR d.Tipo LIKE @Texto)");
+            var t = $"%{textoLimpio}%";
+            query = query.Where(o => EF.Functions.Like(o.Dispositivo.Cliente.Nombre, t)
+                                  || EF.Functions.Like(o.Dispositivo.Cliente.Apellido, t)
+                                  || EF.Functions.Like(o.Dispositivo.Cliente.Nombre + " " + o.Dispositivo.Cliente.Apellido, t)
+                                  || EF.Functions.Like(o.Dispositivo.Tipo, t));
         }
         if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
-            sql.Append(" AND o.Estado = @Estado");
+            query = query.Where(o => o.Estado == estado);
         if (desde.HasValue)
-            sql.Append(" AND o.FechaIngreso >= @Desde");
+            query = query.Where(o => o.FechaIngreso >= desde.Value);
         if (hasta.HasValue)
-            sql.Append(" AND o.FechaIngreso < DATEADD(DAY, 1, @Hasta)");
+            query = query.Where(o => o.FechaIngreso < hasta.Value.AddDays(1));
         if (tecnicoId.HasValue)
-            sql.Append(" AND o.TecnicoID = @TecnicoID");
-        sql.Append(" ORDER BY ").Append(OrdenFlujoEstado).Append(", o.FechaIngreso DESC, o.OrdenID DESC");
+            query = query.Where(o => o.TecnicoID == tecnicoId.Value);
 
-        var lista = new List<OrdenServicio>();
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var cmd = new SqlCommand(sql.ToString(), conn);
-        if (esId)
-            cmd.Parameters.AddWithValue("@OrdenIDBuscado", idBuscado);
-        else if (!string.IsNullOrWhiteSpace(textoLimpio))
-            cmd.Parameters.AddWithValue("@Texto", $"%{textoLimpio}%");
-        if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
-            cmd.Parameters.AddWithValue("@Estado", estado);
-        if (desde.HasValue)
-            cmd.Parameters.AddWithValue("@Desde", desde.Value);
-        if (hasta.HasValue)
-            cmd.Parameters.AddWithValue("@Hasta", hasta.Value);
-        if (tecnicoId.HasValue)
-            cmd.Parameters.AddWithValue("@TecnicoID", tecnicoId.Value);
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read()) lista.Add(Leer(reader));
-        return lista;
+        var lista = await Proyectar(query).ToListAsync(ct);
+        return lista.OrderBy(o => OrdenFlujo(o.Estado))
+            .ThenByDescending(o => o.FechaIngreso)
+            .ThenByDescending(o => o.OrdenID)
+            .ToList();
     }
 
-    public static List<OrdenServicio> ObtenerPorTecnico(int tecnicoId)
+    public static async Task<List<OrdenServicio>> ObtenerPorTecnicoAsync(int tecnicoId, CancellationToken ct = default)
     {
-        var lista = new List<OrdenServicio>();
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var cmd = new SqlCommand(SelectConJoin + " WHERE o.TecnicoID = @TecnicoID ORDER BY o.FechaIngreso DESC, o.OrdenID DESC", conn);
-        cmd.Parameters.AddWithValue("@TecnicoID", tecnicoId);
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read()) lista.Add(Leer(reader));
-        return lista;
+        await using var db = FixTrackDb.Crear();
+        return await Proyectar(db.OrdenesServicio.AsNoTracking().Where(o => o.TecnicoID == tecnicoId))
+            .OrderByDescending(o => o.FechaIngreso)
+            .ThenByDescending(o => o.OrdenID)
+            .ToListAsync(ct);
     }
 
-    public static OrdenServicio? ObtenerPorId(int id)
+    public static async Task<OrdenServicio?> ObtenerPorIdAsync(int id, CancellationToken ct = default)
     {
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var cmd = new SqlCommand(SelectConJoin + " WHERE o.OrdenID = @OrdenID", conn);
-        cmd.Parameters.AddWithValue("@OrdenID", id);
-        using var reader = cmd.ExecuteReader();
-        return reader.Read() ? Leer(reader) : null;
+        await using var db = FixTrackDb.Crear();
+        return await Proyectar(db.OrdenesServicio.AsNoTracking())
+            .FirstOrDefaultAsync(o => o.OrdenID == id, ct);
     }
 
-    public static List<Pago> ObtenerPagosPorOrden(int ordenId)
-    {
-        return PagoDAL.ObtenerPorOrden(ordenId);
-    }
+    public static Task<List<Pago>> ObtenerPagosPorOrdenAsync(int ordenId, CancellationToken ct = default)
+        => PagoDAL.ObtenerPorOrdenAsync(ordenId, ct);
 
-    public static List<HistorialOrden> ObtenerHistorial(int ordenId)
+    public static async Task<List<HistorialOrden>> ObtenerHistorialAsync(int ordenId, CancellationToken ct = default)
     {
-        var lista = new List<HistorialOrden>();
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var cmd = new SqlCommand(@"
-SELECT h.HistorialID, h.OrdenID, h.UsuarioID, h.FechaCambio, h.TipoCambio,
-       h.EstadoAnterior, h.EstadoNuevo, h.CampoModificado, h.ValorAnterior,
-       h.ValorNuevo, h.Comentario, ISNULL(u.NombreUsuario, 'Sistema')
-FROM HistorialOrdenes h
-LEFT JOIN Usuarios u ON h.UsuarioID = u.UsuarioID
-WHERE h.OrdenID = @OrdenID
-ORDER BY h.FechaCambio DESC, h.HistorialID DESC", conn);
-        cmd.Parameters.AddWithValue("@OrdenID", ordenId);
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read()) lista.Add(LeerHistorial(reader));
-        return lista;
-    }
-
-    public static int Insertar(OrdenServicio o)
-    {
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var tx = conn.BeginTransaction();
-        try
-        {
-            int ordenId;
-            using (var cmd = new SqlCommand(@"
-INSERT INTO OrdenesServicio (DispositivoID, TecnicoID, FechaIngreso, ProblemaReportado,
-                             Estado, CostoServicio, Observaciones)
-VALUES (@DispositivoID, @TecnicoID, GETDATE(), @ProblemaReportado,
-        'Pendiente', @CostoServicio, @Observaciones);
-SELECT CAST(SCOPE_IDENTITY() AS INT);", conn, tx))
+        await using var db = FixTrackDb.Crear();
+        return await db.HistorialOrdenes.AsNoTracking()
+            .Where(h => h.OrdenID == ordenId)
+            .Select(h => new HistorialOrden
             {
-                AgregarParametrosOrden(cmd, o);
-                ordenId = (int)cmd.ExecuteScalar();
-            }
-            InsertarHistorial(conn, tx, ordenId, "Creacion", null, "Pendiente", null, null, null, "Orden creada");
-            tx.Commit();
-            return ordenId;
-        }
-        catch
-        {
-            tx.Rollback();
-            throw;
-        }
+                HistorialID = h.HistorialID,
+                OrdenID = h.OrdenID,
+                UsuarioID = h.UsuarioID,
+                FechaCambio = h.FechaCambio,
+                TipoCambio = h.TipoCambio,
+                EstadoAnterior = h.EstadoAnterior,
+                EstadoNuevo = h.EstadoNuevo,
+                CampoModificado = h.CampoModificado,
+                ValorAnterior = h.ValorAnterior,
+                ValorNuevo = h.ValorNuevo,
+                Comentario = h.Comentario,
+                UsuarioNombre = h.Usuario != null ? h.Usuario.NombreUsuario : "Sistema"
+            })
+            .OrderByDescending(h => h.FechaCambio)
+            .ThenByDescending(h => h.HistorialID)
+            .ToListAsync(ct);
     }
 
-    public static bool ActualizarDetalle(OrdenServicio o)
+    public static async Task<int> InsertarAsync(OrdenServicio o, CancellationToken ct = default)
     {
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var tx = conn.BeginTransaction();
-        try
+        await using var db = FixTrackDb.Crear();
+        // Orden + su historial de creación en una sola operación atómica (un único SaveChanges
+        // participa de una única transacción implícita, igual que el BEGIN TRAN/COMMIT anterior).
+        o.Estado = "Pendiente";
+        o.FechaIngreso = DateTime.Now;
+        db.OrdenesServicio.Add(o);
+        db.HistorialOrdenes.Add(new HistorialOrden
         {
-            var anterior = ObtenerPorId(conn, tx, o.OrdenID);
-            if (anterior == null)
-            {
-                tx.Rollback();
-                return false;
-            }
-
-            using var cmd = new SqlCommand(@"
-UPDATE OrdenesServicio SET ProblemaReportado = @ProblemaReportado,
-    Diagnostico = @Diagnostico, TrabajoRealizado = @TrabajoRealizado,
-    CostoServicio = @CostoServicio, Observaciones = @Observaciones,
-    FechaFinalizacion = @FechaFinalizacion
-WHERE OrdenID = @OrdenID", conn, tx);
-            cmd.Parameters.AddWithValue("@ProblemaReportado", o.ProblemaReportado);
-            cmd.Parameters.AddWithValue("@Diagnostico", (object?)o.Diagnostico ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@TrabajoRealizado", (object?)o.TrabajoRealizado ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@CostoServicio", o.CostoServicio);
-            cmd.Parameters.AddWithValue("@Observaciones", (object?)o.Observaciones ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@FechaFinalizacion", (object?)o.FechaFinalizacion ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@OrdenID", o.OrdenID);
-            if (cmd.ExecuteNonQuery() == 0)
-            {
-                tx.Rollback();
-                return false;
-            }
-
-            RegistrarCambio(conn, tx, o.OrdenID, "ProblemaReportado", anterior.ProblemaReportado, o.ProblemaReportado);
-            RegistrarCambio(conn, tx, o.OrdenID, "Diagnostico", anterior.Diagnostico, o.Diagnostico);
-            RegistrarCambio(conn, tx, o.OrdenID, "TrabajoRealizado", anterior.TrabajoRealizado, o.TrabajoRealizado);
-            RegistrarCambio(conn, tx, o.OrdenID, "CostoServicio", anterior.CostoServicio.ToString("F2"), o.CostoServicio.ToString("F2"));
-            RegistrarCambio(conn, tx, o.OrdenID, "Observaciones", anterior.Observaciones, o.Observaciones);
-            RegistrarCambio(conn, tx, o.OrdenID, "FechaFinalizacion", anterior.FechaFinalizacion?.ToString("O"), o.FechaFinalizacion?.ToString("O"));
-            tx.Commit();
-            return true;
-        }
-        catch
-        {
-            tx.Rollback();
-            throw;
-        }
+            Orden = o,
+            UsuarioID = Sesion.UsuarioID > 0 ? Sesion.UsuarioID : null,
+            TipoCambio = "Creacion",
+            EstadoNuevo = "Pendiente",
+            Comentario = "Orden creada",
+            FechaCambio = DateTime.Now
+        });
+        await db.SaveChangesAsync(ct);
+        return o.OrdenID;
     }
 
-    /// <summary>
-    /// Obtiene el estado actual de una orden (usado para validar la transición antes de escribir).
-    /// </summary>
-    public static string? ObtenerEstadoActual(int id)
+    public static async Task<bool> ActualizarDetalleAsync(OrdenServicio o, CancellationToken ct = default)
     {
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var cmd = new SqlCommand("SELECT Estado FROM OrdenesServicio WHERE OrdenID = @OrdenID", conn);
-        cmd.Parameters.AddWithValue("@OrdenID", id);
-        var resultado = cmd.ExecuteScalar();
-        return resultado == DBNull.Value || resultado == null ? null : (string)resultado;
+        await using var db = FixTrackDb.Crear();
+
+        var anterior = await db.OrdenesServicio
+            .FirstOrDefaultAsync(x => x.OrdenID == o.OrdenID, ct);
+        if (anterior == null) return false;
+
+        var cambios = new List<HistorialOrden>();
+        void RegistrarCambio(string campo, string? valorAnterior, string? valorNuevo)
+        {
+            if (string.Equals(valorAnterior, valorNuevo, StringComparison.Ordinal)) return;
+            cambios.Add(new HistorialOrden
+            {
+                OrdenID = o.OrdenID,
+                UsuarioID = Sesion.UsuarioID > 0 ? Sesion.UsuarioID : null,
+                TipoCambio = "Edicion",
+                CampoModificado = campo,
+                ValorAnterior = valorAnterior,
+                ValorNuevo = valorNuevo,
+                Comentario = "Campo actualizado",
+                FechaCambio = DateTime.Now
+            });
+        }
+
+        RegistrarCambio("ProblemaReportado", anterior.ProblemaReportado, o.ProblemaReportado);
+        RegistrarCambio("Diagnostico", anterior.Diagnostico, o.Diagnostico);
+        RegistrarCambio("TrabajoRealizado", anterior.TrabajoRealizado, o.TrabajoRealizado);
+        RegistrarCambio("CostoServicio", anterior.CostoServicio.ToString("F2"), o.CostoServicio.ToString("F2"));
+        RegistrarCambio("Observaciones", anterior.Observaciones, o.Observaciones);
+        RegistrarCambio("FechaFinalizacion", anterior.FechaFinalizacion?.ToString("O"), o.FechaFinalizacion?.ToString("O"));
+
+        anterior.ProblemaReportado = o.ProblemaReportado;
+        anterior.Diagnostico = o.Diagnostico;
+        anterior.TrabajoRealizado = o.TrabajoRealizado;
+        anterior.CostoServicio = o.CostoServicio;
+        anterior.Observaciones = o.Observaciones;
+        anterior.FechaFinalizacion = o.FechaFinalizacion;
+
+        if (cambios.Count > 0) db.HistorialOrdenes.AddRange(cambios);
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    /// <summary>Obtiene el estado actual de una orden (usado para validar la transición antes de escribir).</summary>
+    public static async Task<string?> ObtenerEstadoActualAsync(int id, CancellationToken ct = default)
+    {
+        await using var db = FixTrackDb.Crear();
+        return await db.OrdenesServicio.AsNoTracking()
+            .Where(o => o.OrdenID == id)
+            .Select(o => o.Estado)
+            .FirstOrDefaultAsync(ct);
     }
 
     /// <summary>
     /// Cambia el estado de la orden validando la transición contra el flujo real.
-    /// Al pasar a 'Listo' o 'Entregado' se registra la FechaFinalizacion si aún no existe.
-    /// Devuelve false si la orden no existe o si la transición no es válida.
+    /// Al pasar a 'Listo' o 'Entregado' registra la FechaFinalizacion si aún no existe.
+    /// Concurrencia optimista: la escritura exige que el estado leído siga vigente
+    /// (WHERE Estado = estado leído); si otro usuario lo cambió primero, no se aplica nada.
+    /// Devuelve false si la orden no existe o si la transición no es válida/conflictiva.
     /// </summary>
-    public static bool ActualizarEstado(int id, string nuevoEstado)
+    public static async Task<bool> ActualizarEstadoAsync(int id, string nuevoEstado, CancellationToken ct = default)
     {
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var tx = conn.BeginTransaction();
-        try
-        {
-            using var estadoCmd = new SqlCommand("SELECT Estado FROM OrdenesServicio WITH (UPDLOCK, HOLDLOCK) WHERE OrdenID = @OrdenID", conn, tx);
-            estadoCmd.Parameters.AddWithValue("@OrdenID", id);
-            var estadoResultado = estadoCmd.ExecuteScalar();
-            var estadoActual = estadoResultado as string;
-            if (estadoActual == null || !EstadoOrdenTexto.EsTransicionValida(estadoActual, nuevoEstado))
-            {
-                tx.Rollback();
-                return false;
-            }
+        await using var db = FixTrackDb.Crear();
+        await using var tx = await db.Database
+            .BeginTransactionAsync(System.Data.IsolationLevel.Serializable, ct);
 
-            using var cmd = new SqlCommand(@"
-UPDATE OrdenesServicio SET Estado = @Estado,
-    FechaFinalizacion = CASE
-        WHEN @Estado IN ('Listo', 'Entregado') AND FechaFinalizacion IS NULL THEN GETDATE()
-        WHEN @Estado NOT IN ('Listo', 'Entregado') THEN NULL
-        ELSE FechaFinalizacion END
-WHERE OrdenID = @OrdenID AND Estado = @EstadoActual", conn, tx);
-            cmd.Parameters.AddWithValue("@EstadoActual", estadoActual);
-            cmd.Parameters.AddWithValue("@Estado", nuevoEstado);
-            cmd.Parameters.AddWithValue("@OrdenID", id);
-            if (cmd.ExecuteNonQuery() == 0)
-            {
-                tx.Rollback();
-                return false;
-            }
-            InsertarHistorial(conn, tx, id, "Estado", estadoActual, nuevoEstado, null, null, null, "Cambio de estado");
-            tx.Commit();
-            return true;
+        var orden = await db.OrdenesServicio
+            .FirstOrDefaultAsync(o => o.OrdenID == id, ct);
+        if (orden == null || !EstadoOrdenTexto.EsTransicionValida(orden.Estado, nuevoEstado))
+        {
+            await tx.RollbackAsync(ct);
+            return false;
         }
-        catch
+
+        var estadoActual = orden.Estado;
+        var nuevoEsFinal = EstadoOrdenTexto.EsEstadoFinal(nuevoEstado);
+
+        // Actualización condicional: si el estado cambió entre la lectura y aquí (otro usuario),
+        // no se afectan filas y se informa el conflicto en vez de sobrescribir silenciosamente.
+        var afectadas = await db.OrdenesServicio
+            .Where(x => x.OrdenID == id && x.Estado == estadoActual)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(x => x.Estado, nuevoEstado)
+                .SetProperty(x => x.FechaFinalizacion,
+                    x => nuevoEsFinal && x.FechaFinalizacion == null ? DateTime.Now
+                       : nuevoEsFinal ? x.FechaFinalizacion
+                       : null), ct);
+
+        if (afectadas == 0)
         {
-            tx.Rollback();
-            throw;
+            await tx.RollbackAsync(ct);
+            return false;
         }
-    }
 
-    private static void AgregarParametrosOrden(SqlCommand cmd, OrdenServicio o)
-    {
-        cmd.Parameters.AddWithValue("@DispositivoID", o.DispositivoID);
-        cmd.Parameters.AddWithValue("@TecnicoID", (object?)o.TecnicoID ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@ProblemaReportado", o.ProblemaReportado);
-        cmd.Parameters.AddWithValue("@CostoServicio", o.CostoServicio);
-        cmd.Parameters.AddWithValue("@Observaciones", (object?)o.Observaciones ?? DBNull.Value);
-    }
-
-    private static OrdenServicio? ObtenerPorId(SqlConnection conn, SqlTransaction tx, int id)
-    {
-        using var cmd = new SqlCommand(SelectConJoin + " WHERE o.OrdenID = @OrdenID", conn, tx);
-        cmd.Parameters.AddWithValue("@OrdenID", id);
-        using var reader = cmd.ExecuteReader();
-        return reader.Read() ? Leer(reader) : null;
-    }
-
-    private static void RegistrarCambio(SqlConnection conn, SqlTransaction tx, int ordenId, string campo, string? anterior, string? nuevo)
-    {
-        if (string.Equals(anterior, nuevo, StringComparison.Ordinal)) return;
-        InsertarHistorial(conn, tx, ordenId, "Edicion", null, null, campo, anterior, nuevo, "Campo actualizado");
-    }
-
-    private static void InsertarHistorial(SqlConnection conn, SqlTransaction tx, int ordenId, string tipo, string? estadoAnterior,
-        string? estadoNuevo, string? campo, string? valorAnterior, string? valorNuevo, string? comentario)
-    {
-        using var cmd = new SqlCommand(@"
-INSERT INTO HistorialOrdenes (OrdenID, UsuarioID, TipoCambio, EstadoAnterior, EstadoNuevo,
-                              CampoModificado, ValorAnterior, ValorNuevo, Comentario)
-VALUES (@OrdenID, @UsuarioID, @TipoCambio, @EstadoAnterior, @EstadoNuevo,
-        @Campo, @ValorAnterior, @ValorNuevo, @Comentario)", conn, tx);
-        cmd.Parameters.AddWithValue("@OrdenID", ordenId);
-        cmd.Parameters.AddWithValue("@UsuarioID", Sesion.UsuarioID > 0 ? Sesion.UsuarioID : DBNull.Value);
-        cmd.Parameters.AddWithValue("@TipoCambio", tipo);
-        cmd.Parameters.AddWithValue("@EstadoAnterior", (object?)estadoAnterior ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@EstadoNuevo", (object?)estadoNuevo ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@Campo", (object?)campo ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@ValorAnterior", (object?)valorAnterior ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@ValorNuevo", (object?)valorNuevo ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("@Comentario", (object?)comentario ?? DBNull.Value);
-        cmd.ExecuteNonQuery();
-    }
-
-    private static HistorialOrden LeerHistorial(SqlDataReader r) => new()
-    {
-        HistorialID = r.GetInt32(0),
-        OrdenID = r.GetInt32(1),
-        UsuarioID = r.IsDBNull(2) ? null : r.GetInt32(2),
-        FechaCambio = r.GetDateTime(3),
-        TipoCambio = r.GetString(4),
-        EstadoAnterior = r.IsDBNull(5) ? null : r.GetString(5),
-        EstadoNuevo = r.IsDBNull(6) ? null : r.GetString(6),
-        CampoModificado = r.IsDBNull(7) ? null : r.GetString(7),
-        ValorAnterior = r.IsDBNull(8) ? null : r.GetString(8),
-        ValorNuevo = r.IsDBNull(9) ? null : r.GetString(9),
-        Comentario = r.IsDBNull(10) ? null : r.GetString(10),
-        UsuarioNombre = r.GetString(11)
-    };
-
-    private static OrdenServicio Leer(SqlDataReader r) => new()
-    {
-        OrdenID = r.GetInt32(0),
-        DispositivoID = r.GetInt32(1),
-        TecnicoID = r.IsDBNull(2) ? null : r.GetInt32(2),
-        FechaIngreso = r.GetDateTime(3),
-        ProblemaReportado = r.GetString(4),
-        Diagnostico = r.IsDBNull(5) ? null : r.GetString(5),
-        TrabajoRealizado = r.IsDBNull(6) ? null : r.GetString(6),
-        Estado = r.GetString(7),
-        CostoServicio = r.GetDecimal(8),
-        FechaFinalizacion = r.IsDBNull(9) ? null : r.GetDateTime(9),
-        Observaciones = r.IsDBNull(10) ? null : r.GetString(10),
-        ClienteNombre = r.GetString(11),
-        DispositivoTexto = r.GetString(12),
-        TecnicoNombre = r.GetString(13)
-    };
-/// <summary>Conteo de órdenes por estado (para las 5 métricas del Dashboard).</summary>
-    public static Dictionary<string, int> ObtenerConteoPorEstado()
-    {
-        var resultado = new Dictionary<string, int>
+        db.HistorialOrdenes.Add(new HistorialOrden
         {
-            ["Pendiente"] = 0,
-            ["En diagnostico"] = 0,
-            ["En reparacion"] = 0,
-            ["Listo"] = 0,
-            ["Entregado"] = 0
-        };
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var cmd = new SqlCommand("SELECT Estado, COUNT(*) FROM OrdenesServicio GROUP BY Estado", conn);
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            var valor = reader.GetString(0);
-            if (resultado.ContainsKey(valor)) resultado[valor] = reader.GetInt32(1);
-        }
-        return resultado;
+            OrdenID = id,
+            UsuarioID = Sesion.UsuarioID > 0 ? Sesion.UsuarioID : null,
+            TipoCambio = "Estado",
+            EstadoAnterior = estadoActual,
+            EstadoNuevo = nuevoEstado,
+            Comentario = "Cambio de estado",
+            FechaCambio = DateTime.Now
+        });
+        await db.SaveChangesAsync(ct);
+        await tx.CommitAsync(ct);
+        return true;
+    }
+
+    /// <summary>Conteo de órdenes por estado (para las 5 métricas del Dashboard).</summary>
+    public static async Task<Dictionary<string, int>> ObtenerConteoPorEstadoAsync(CancellationToken ct = default)
+    {
+        await using var db = FixTrackDb.Crear();
+        var filas = await db.OrdenesServicio.AsNoTracking()
+            .GroupBy(o => o.Estado)
+            .Select(g => new { g.Key, Cantidad = g.Count() })
+            .ToListAsync(ct);
+        return EnDiccionario(filas.Select(f => (f.Key, f.Cantidad)));
     }
 
     /// <summary>Conteo de órdenes por estado filtrado por técnico (para métricas del Dashboard).</summary>
-    public static Dictionary<string, int> ObtenerConteoPorEstado(int tecnicoId)
+    public static async Task<Dictionary<string, int>> ObtenerConteoPorEstadoAsync(int tecnicoId, CancellationToken ct = default)
+    {
+        await using var db = FixTrackDb.Crear();
+        var filas = await db.OrdenesServicio.AsNoTracking()
+            .Where(o => o.TecnicoID == tecnicoId)
+            .GroupBy(o => o.Estado)
+            .Select(g => new { g.Key, Cantidad = g.Count() })
+            .ToListAsync(ct);
+        return EnDiccionario(filas.Select(f => (f.Key, f.Cantidad)));
+    }
+
+    private static Dictionary<string, int> EnDiccionario(IEnumerable<(string Key, int Cantidad)> filas)
     {
         var resultado = new Dictionary<string, int>
         {
@@ -384,18 +299,9 @@ VALUES (@OrdenID, @UsuarioID, @TipoCambio, @EstadoAnterior, @EstadoNuevo,
             ["Listo"] = 0,
             ["Entregado"] = 0
         };
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var cmd = new SqlCommand(@"
-SELECT Estado, COUNT(*) FROM OrdenesServicio
-WHERE TecnicoID = @TecnicoID
-GROUP BY Estado", conn);
-        cmd.Parameters.AddWithValue("@TecnicoID", tecnicoId);
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        foreach (var (clave, cantidad) in filas)
         {
-            var valor = reader.GetString(0);
-            if (resultado.ContainsKey(valor)) resultado[valor] = reader.GetInt32(1);
+            if (resultado.ContainsKey(clave)) resultado[clave] = cantidad;
         }
         return resultado;
     }
@@ -404,49 +310,51 @@ GROUP BY Estado", conn);
     /// Escenario transaccional del plan §4.7: crea la orden de servicio y registra
     /// el pago inicial en una misma transacción (Todo o Nada).
     /// </summary>
-    public static int InsertarConPagoInicial(OrdenServicio o, Pago pago)
+    public static async Task<int> InsertarConPagoInicialAsync(OrdenServicio o, Pago pago, CancellationToken ct = default)
     {
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var tx = conn.BeginTransaction();
+        if (pago.Monto <= 0 || pago.Monto > o.CostoServicio)
+            throw new ApplicationException("El abono inicial debe ser mayor que cero y no exceder el costo del servicio.");
+
+        await using var db = FixTrackDb.Crear();
+        // Orden + historial de creación + pago + historial de pago: un único SaveChangesAsync,
+        // por lo que todo se confirma o deshace en una sola transacción.
+        o.Estado = "Pendiente";
+        o.FechaIngreso = DateTime.Now;
+        db.OrdenesServicio.Add(o);
+        db.HistorialOrdenes.Add(new HistorialOrden
+        {
+            Orden = o,
+            UsuarioID = Sesion.UsuarioID > 0 ? Sesion.UsuarioID : null,
+            TipoCambio = "Creacion",
+            EstadoNuevo = "Pendiente",
+            Comentario = "Orden creada con abono inicial",
+            FechaCambio = DateTime.Now
+        });
+
+        pago.Orden = o;
+        pago.FechaPago = DateTime.Now;
+        db.Pagos.Add(pago);
+        db.HistorialOrdenes.Add(new HistorialOrden
+        {
+            Orden = o,
+            UsuarioID = Sesion.UsuarioID > 0 ? Sesion.UsuarioID : null,
+            TipoCambio = "Pago",
+            CampoModificado = "Pago inicial",
+            ValorNuevo = pago.Monto.ToString("F2"),
+            Comentario = "Abono inicial registrado",
+            FechaCambio = DateTime.Now
+        });
+
         try
         {
-            if (pago.Monto <= 0 || pago.Monto > o.CostoServicio)
-                throw new ApplicationException("El abono inicial debe ser mayor que cero y no exceder el costo del servicio.");
-
-            int ordenId;
-            using (var cmd = new SqlCommand(@"
-INSERT INTO OrdenesServicio (DispositivoID, TecnicoID, FechaIngreso, ProblemaReportado,
-                             Estado, CostoServicio, Observaciones)
-VALUES (@DispositivoID, @TecnicoID, GETDATE(), @ProblemaReportado,
-        'Pendiente', @CostoServicio, @Observaciones);
-SELECT CAST(SCOPE_IDENTITY() AS INT);", conn, tx))
-            {
-                AgregarParametrosOrden(cmd, o);
-                ordenId = (int)cmd.ExecuteScalar();
-            }
-            InsertarHistorial(conn, tx, ordenId, "Creacion", null, "Pendiente", null, null, null, "Orden creada con abono inicial");
-
-            using (var cmd = new SqlCommand(@"
-INSERT INTO Pagos (OrdenID, FechaPago, Monto, MetodoPago, Observaciones)
-VALUES (@OrdenID, GETDATE(), @Monto, @MetodoPago, @Observaciones);", conn, tx))
-            {
-                cmd.Parameters.AddWithValue("@OrdenID", ordenId);
-                cmd.Parameters.AddWithValue("@Monto", pago.Monto);
-                cmd.Parameters.AddWithValue("@MetodoPago", pago.MetodoPago);
-                cmd.Parameters.AddWithValue("@Observaciones", (object?)pago.Observaciones ?? DBNull.Value);
-                if (cmd.ExecuteNonQuery() != 1)
-                    throw new ApplicationException("No se pudo registrar el pago inicial.");
-            }
-            InsertarHistorial(conn, tx, ordenId, "Pago", null, null, "Pago inicial", null, pago.Monto.ToString("F2"), "Abono inicial registrado");
-
-            tx.Commit();
-            return ordenId;
+            await db.SaveChangesAsync(ct);
         }
-        catch
+        catch (DbUpdateException ex) when (ex.InnerException is Microsoft.Data.SqlClient.SqlException { Number: 547 }
+            or Microsoft.Data.SqlClient.SqlException { Number: 515 })
         {
-            tx.Rollback();
-            throw;
+            // Violación de CHECK (Monto > 0) o de FK: mismo error de negocio que la versión anterior.
+            throw new ApplicationException("No se pudo registrar la orden con el abono inicial. Verifique el monto y el costo del servicio.", ex);
         }
+        return o.OrdenID;
     }
 }

@@ -1,164 +1,99 @@
-﻿using System.Text;
-using FixTrack.Modelos;
-using Microsoft.Data.SqlClient;
+﻿using FixTrack.Modelos;
+using Microsoft.EntityFrameworkCore;
 
 namespace FixTrack.Datos;
 
+/// <summary>Acceso a datos de dispositivos sobre EF Core (migrado desde ADO.NET).</summary>
 public static class DispositivoDAL
 {
-    private const string SelectConJoin = @"
-SELECT d.DispositivoID, d.ClienteID, d.Tipo, d.Marca, d.Modelo, d.NumeroSerie,
-       d.Descripcion, d.FechaRegistro,
-       c.Nombre + ' ' + c.Apellido AS ClienteNombre
-FROM Dispositivos d
-INNER JOIN Clientes c ON d.ClienteID = c.ClienteID";
+    /// <summary>Proyección compartida: solo los campos necesarios, con el nombre del cliente calculado en BD.</summary>
+    private static IQueryable<Dispositivo> Proyectar(IQueryable<Dispositivo> query) =>
+        query.Select(d => new Dispositivo
+        {
+            DispositivoID = d.DispositivoID,
+            ClienteID = d.ClienteID,
+            Tipo = d.Tipo,
+            Marca = d.Marca,
+            Modelo = d.Modelo,
+            NumeroSerie = d.NumeroSerie,
+            Descripcion = d.Descripcion,
+            FechaRegistro = d.FechaRegistro,
+            ClienteNombre = d.Cliente.Nombre + " " + d.Cliente.Apellido
+        });
 
-    public static List<Dispositivo> ObtenerTodos()
+    public static async Task<List<Dispositivo>> ObtenerTodosAsync(CancellationToken ct = default)
     {
-        try
-        {
-            var lista = new List<Dispositivo>();
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(SelectConJoin + " ORDER BY d.FechaRegistro DESC, d.DispositivoID DESC", conn);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) lista.Add(Leer(reader));
-            return lista;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener la lista de dispositivos.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await Proyectar(db.Dispositivos.AsNoTracking())
+            .OrderByDescending(d => d.FechaRegistro).ThenByDescending(d => d.DispositivoID)
+            .ToListAsync(ct);
     }
 
-    public static List<Dispositivo> Buscar(string? texto)
+    public static async Task<List<Dispositivo>> BuscarAsync(string? texto, CancellationToken ct = default)
     {
-        try
-        {
-            var textoLimpio = texto?.Trim();
-            var esId = int.TryParse(textoLimpio, out var idBuscado);
+        var textoLimpio = texto?.Trim();
+        var esId = int.TryParse(textoLimpio, out var idBuscado);
 
-            var sql = new StringBuilder(SelectConJoin);
-            sql.Append(" WHERE 1 = 1");
-            if (esId)
-                sql.Append(" AND d.DispositivoID = @DispositivoIDBuscado");
-            else if (!string.IsNullOrWhiteSpace(textoLimpio))
-                sql.Append(" AND (d.Tipo LIKE @Texto OR ISNULL(d.Marca, '') LIKE @Texto OR ISNULL(d.Modelo, '') LIKE @Texto OR ISNULL(d.NumeroSerie, '') LIKE @Texto OR c.Nombre LIKE @Texto OR c.Apellido LIKE @Texto OR (c.Nombre + ' ' + c.Apellido) LIKE @Texto)");
-            sql.Append(" ORDER BY d.FechaRegistro DESC, d.DispositivoID DESC");
+        await using var db = FixTrackDb.Crear();
+        var query = db.Dispositivos.AsNoTracking();
 
-            var lista = new List<Dispositivo>();
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(sql.ToString(), conn);
-            if (esId)
-                cmd.Parameters.AddWithValue("@DispositivoIDBuscado", idBuscado);
-            else if (!string.IsNullOrWhiteSpace(textoLimpio))
-                cmd.Parameters.AddWithValue("@Texto", $"%{textoLimpio}%");
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) lista.Add(Leer(reader));
-            return lista;
-        }
-        catch (SqlException ex)
+        if (esId)
+            query = query.Where(d => d.DispositivoID == idBuscado);
+        else if (!string.IsNullOrWhiteSpace(textoLimpio))
         {
-            throw new ApplicationException("Error al buscar dispositivos.", ex);
+            var t = $"%{textoLimpio}%";
+            query = query.Where(d => EF.Functions.Like(d.Tipo, t)
+                                  || EF.Functions.Like(d.Marca ?? "", t)
+                                  || EF.Functions.Like(d.Modelo ?? "", t)
+                                  || EF.Functions.Like(d.NumeroSerie ?? "", t)
+                                  || EF.Functions.Like(d.Cliente.Nombre, t)
+                                  || EF.Functions.Like(d.Cliente.Apellido, t)
+                                  || EF.Functions.Like(d.Cliente.Nombre + " " + d.Cliente.Apellido, t));
         }
+
+        return await Proyectar(query)
+            .OrderByDescending(d => d.FechaRegistro).ThenByDescending(d => d.DispositivoID)
+            .ToListAsync(ct);
     }
 
-    public static List<Dispositivo> ObtenerPorCliente(int clienteId)
+    public static async Task<List<Dispositivo>> ObtenerPorClienteAsync(int clienteId, CancellationToken ct = default)
     {
-        try
-        {
-            var lista = new List<Dispositivo>();
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(SelectConJoin + " WHERE d.ClienteID = @ClienteID ORDER BY d.FechaRegistro DESC, d.DispositivoID DESC", conn);
-            cmd.Parameters.AddWithValue("@ClienteID", clienteId);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) lista.Add(Leer(reader));
-            return lista;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener los dispositivos del cliente.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await Proyectar(db.Dispositivos.AsNoTracking().Where(d => d.ClienteID == clienteId))
+            .OrderByDescending(d => d.FechaRegistro).ThenByDescending(d => d.DispositivoID)
+            .ToListAsync(ct);
     }
 
-    public static Dispositivo? ObtenerPorId(int id)
+    public static async Task<Dispositivo?> ObtenerPorIdAsync(int id, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(SelectConJoin + " WHERE d.DispositivoID = @DispositivoID", conn);
-            cmd.Parameters.AddWithValue("@DispositivoID", id);
-            using var reader = cmd.ExecuteReader();
-            return reader.Read() ? Leer(reader) : null;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener el dispositivo.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await Proyectar(db.Dispositivos.AsNoTracking())
+            .FirstOrDefaultAsync(d => d.DispositivoID == id, ct);
     }
 
-    public static int Insertar(Dispositivo d)
+    public static async Task<int> InsertarAsync(Dispositivo d, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(@"
-INSERT INTO Dispositivos (ClienteID, Tipo, Marca, Modelo, NumeroSerie, Descripcion, FechaRegistro)
-VALUES (@ClienteID, @Tipo, @Marca, @Modelo, @NumeroSerie, @Descripcion, GETDATE());
-SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
-            cmd.Parameters.AddWithValue("@ClienteID", d.ClienteID);
-            cmd.Parameters.AddWithValue("@Tipo", d.Tipo);
-            cmd.Parameters.AddWithValue("@Marca", (object?)d.Marca ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Modelo", (object?)d.Modelo ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@NumeroSerie", (object?)d.NumeroSerie ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Descripcion", (object?)d.Descripcion ?? DBNull.Value);
-            return (int)cmd.ExecuteScalar();
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al registrar el dispositivo.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        d.FechaRegistro = DateTime.Now;
+        db.Dispositivos.Add(d);
+        await db.SaveChangesAsync(ct);
+        return d.DispositivoID;
     }
 
-    public static bool Actualizar(Dispositivo d)
+    public static async Task<bool> ActualizarAsync(Dispositivo d, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(@"
-UPDATE Dispositivos SET ClienteID = @ClienteID, Tipo = @Tipo, Marca = @Marca,
-    Modelo = @Modelo, NumeroSerie = @NumeroSerie, Descripcion = @Descripcion
-WHERE DispositivoID = @DispositivoID", conn);
-            cmd.Parameters.AddWithValue("@ClienteID", d.ClienteID);
-            cmd.Parameters.AddWithValue("@Tipo", d.Tipo);
-            cmd.Parameters.AddWithValue("@Marca", (object?)d.Marca ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Modelo", (object?)d.Modelo ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@NumeroSerie", (object?)d.NumeroSerie ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@Descripcion", (object?)d.Descripcion ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@DispositivoID", d.DispositivoID);
-            return cmd.ExecuteNonQuery() > 0;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al actualizar el dispositivo.", ex);
-        }
-    }
+        await using var db = FixTrackDb.Crear();
+        var existente = await db.Dispositivos
+            .FirstOrDefaultAsync(x => x.DispositivoID == d.DispositivoID, ct);
+        if (existente == null) return false;
 
-    private static Dispositivo Leer(SqlDataReader r) => new()
-    {
-        DispositivoID = r.GetInt32(0),
-        ClienteID = r.GetInt32(1),
-        Tipo = r.GetString(2),
-        Marca = r.IsDBNull(3) ? null : r.GetString(3),
-        Modelo = r.IsDBNull(4) ? null : r.GetString(4),
-        NumeroSerie = r.IsDBNull(5) ? null : r.GetString(5),
-        Descripcion = r.IsDBNull(6) ? null : r.GetString(6),
-        FechaRegistro = r.GetDateTime(7),
-        ClienteNombre = r.GetString(8)
-    };
+        existente.ClienteID = d.ClienteID;
+        existente.Tipo = d.Tipo;
+        existente.Marca = d.Marca;
+        existente.Modelo = d.Modelo;
+        existente.NumeroSerie = d.NumeroSerie;
+        existente.Descripcion = d.Descripcion;
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
 }

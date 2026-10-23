@@ -9,6 +9,9 @@ public class Usuario
     public string Estado { get; set; } = "Activo";
     public int? TecnicoID { get; set; }
 
+    // Navegación EF Core (FK TecnicoID, relación 0..1 : 0..1). No genera columna nueva.
+    public Tecnico? Tecnico { get; set; }
+
     // Propiedad de visualización (LEFT JOIN con Tecnicos en las consultas de listado)
     public string NombreTecnico { get; set; } = string.Empty;
 }

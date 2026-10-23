@@ -14,6 +14,10 @@ public class OrdenServicio
     public DateTime? FechaFinalizacion { get; set; }
     public string? Observaciones { get; set; }
 
+    // Navegaciones EF Core (FKs DispositivoID y TecnicoID). No generan columnas nuevas.
+    public Dispositivo? Dispositivo { get; set; }
+    public Tecnico? Tecnico { get; set; }
+
     // Propiedades de visualización (provienen de JOINs en las consultas de listado)
     public string ClienteNombre { get; set; } = string.Empty;
     public string DispositivoTexto { get; set; } = string.Empty;

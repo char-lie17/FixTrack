@@ -1,109 +1,138 @@
 ﻿using System.Data;
-using Microsoft.Data.SqlClient;
+using FixTrack.Modelos;
+using Microsoft.EntityFrameworkCore;
 
 namespace FixTrack.Datos;
 
+/// <summary>
+/// Reportes migrados a EF Core. Se conserva el contrato de salida (DataTable) para no
+/// modificar la interfaz, y la columna de resultados de cada reporte es idéntica a la versión ADO.NET.
+/// </summary>
 public static class ReportesDAL
 {
-    /// <summary>Reporte 1: cantidades y subtotales de órdenes agrupadas por estado.</summary>
-    public static DataTable ObtenerOrdenesPorEstado(DateTime desde, DateTime hasta)
+    // Tipos de fila intermedios (propiedades seteables para que EF materialice el resultado).
+    public sealed class FilaEstado
     {
-        try
-        {
-            return EjecutarProcedimiento("sp_ReporteOrdenesPorEstado", desde, hasta);
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al generar el reporte de órdenes por estado.", ex);
-        }
+        public string Estado { get; set; } = string.Empty;
+        public int Cantidad { get; set; }
+        public decimal Subtotal { get; set; }
+    }
+
+    public sealed class FilaTecnico
+    {
+        public string Tecnico { get; set; } = string.Empty;
+        public int Cantidad { get; set; }
+        public decimal Subtotal { get; set; }
+    }
+
+    public sealed class FilaServicio
+    {
+        public int Cantidad { get; set; }
+        public decimal TotalFacturado { get; set; }
+        public DateTime? PrimerFinalizado { get; set; }
+        public DateTime? UltimoFinalizado { get; set; }
+    }
+
+    public sealed class FilaPago
+    {
+        public string MetodoPago { get; set; } = string.Empty;
+        public int Cantidad { get; set; }
+        public decimal Total { get; set; }
+    }
+
+    /// <summary>Reporte 1: cantidades y subtotales de órdenes agrupadas por estado.
+    /// Sigue ejecutando el procedimiento almacenado sp_ReporteOrdenesPorEstado, ahora invocado a través de EF Core.</summary>
+    public static async Task<DataTable> ObtenerOrdenesPorEstadoAsync(DateTime desde, DateTime hasta, CancellationToken ct = default)
+    {
+        await using var db = FixTrackDb.Crear();
+        var filas = await db.Database
+            .SqlQuery<FilaEstado>($"EXEC dbo.sp_ReporteOrdenesPorEstado @Desde = {desde.Date}, @Hasta = {hasta.Date}")
+            .ToListAsync(ct);
+        return ADataTable(filas, "Estado", "Cantidad", "Subtotal");
     }
 
     /// <summary>Reporte 2: cantidades de órdenes por técnico asignado.</summary>
-    public static DataTable ObtenerOrdenesPorTecnico(DateTime desde, DateTime hasta)
+    public static async Task<DataTable> ObtenerOrdenesPorTecnicoAsync(DateTime desde, DateTime hasta, CancellationToken ct = default)
     {
-        try
-        {
-            return Ejecutar(@"
-SELECT ISNULL(t.Nombre + ' ' + t.Apellido, 'Sin asignar') AS Tecnico,
-       COUNT(*) AS Cantidad,
-       SUM(o.CostoServicio) AS Subtotal
-FROM OrdenesServicio o
-LEFT JOIN Tecnicos t ON o.TecnicoID = t.TecnicoID
-WHERE o.FechaIngreso >= @Desde AND o.FechaIngreso < DATEADD(DAY, 1, @Hasta)
-GROUP BY t.Nombre, t.Apellido
-ORDER BY Tecnico", desde, hasta);
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al generar el reporte de órdenes por técnico.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        var filas = await db.OrdenesServicio.AsNoTracking()
+            .Where(o => o.FechaIngreso >= desde.Date && o.FechaIngreso < hasta.Date.AddDays(1))
+            .GroupBy(o => o.TecnicoID == null
+                ? "Sin asignar"
+                : o.Tecnico!.Nombre + " " + o.Tecnico!.Apellido)
+            .Select(g => new FilaTecnico
+            {
+                Tecnico = g.Key,
+                Cantidad = g.Count(),
+                Subtotal = g.Sum(o => o.CostoServicio)
+            })
+            .OrderBy(x => x.Tecnico)
+            .ToListAsync(ct);
+        return ADataTable(filas, "Tecnico", "Cantidad", "Subtotal");
     }
 
     /// <summary>Reporte 3: servicios entregados en el rango.</summary>
-    public static DataTable ObtenerServiciosCompletados(DateTime desde, DateTime hasta)
+    public static async Task<DataTable> ObtenerServiciosCompletadosAsync(DateTime desde, DateTime hasta, CancellationToken ct = default)
     {
-        try
-        {
-            return Ejecutar(@"
-SELECT COUNT(*) AS Cantidad,
-       ISNULL(SUM(CostoServicio), 0) AS TotalFacturado,
-       MIN(FechaFinalizacion) AS PrimerFinalizado,
-       MAX(FechaFinalizacion) AS UltimoFinalizado
-FROM OrdenesServicio
-WHERE Estado = 'Entregado'
-  AND FechaFinalizacion >= @Desde
-  AND FechaFinalizacion < DATEADD(DAY, 1, @Hasta)", desde, hasta);
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al generar el reporte de servicios completados.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        var fila = await db.OrdenesServicio.AsNoTracking()
+            .Where(o => o.Estado == "Entregado"
+                     && o.FechaFinalizacion >= desde.Date
+                     && o.FechaFinalizacion < hasta.Date.AddDays(1))
+            .GroupBy(_ => 1)
+            .Select(g => new FilaServicio
+            {
+                Cantidad = g.Count(),
+                TotalFacturado = g.Sum(o => o.CostoServicio),
+                PrimerFinalizado = g.Min(o => o.FechaFinalizacion),
+                UltimoFinalizado = g.Max(o => o.FechaFinalizacion)
+            })
+            .FirstOrDefaultAsync(ct) ?? new FilaServicio
+            {
+                Cantidad = 0,
+                TotalFacturado = 0m,
+                PrimerFinalizado = null,
+                UltimoFinalizado = null
+            };
+        return ADataTable(new[] { fila }, "Cantidad", "TotalFacturado", "PrimerFinalizado", "UltimoFinalizado");
     }
 
     /// <summary>Reporte 4: pagos registrados con total acumulado.</summary>
-    public static DataTable ObtenerPagosRegistrados(DateTime desde, DateTime hasta)
+    public static async Task<DataTable> ObtenerPagosRegistradosAsync(DateTime desde, DateTime hasta, CancellationToken ct = default)
     {
-        try
-        {
-            return Ejecutar(@"
-SELECT MetodoPago, COUNT(*) AS Cantidad, SUM(Monto) AS Total
-FROM Pagos
-WHERE FechaPago >= @Desde AND FechaPago < DATEADD(DAY, 1, @Hasta)
-GROUP BY MetodoPago
-ORDER BY MetodoPago", desde, hasta);
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al generar el reporte de pagos registrados.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        var filas = await db.Pagos.AsNoTracking()
+            .Where(p => p.FechaPago >= desde.Date && p.FechaPago < hasta.Date.AddDays(1))
+            .GroupBy(p => p.MetodoPago)
+            .Select(g => new FilaPago
+            {
+                MetodoPago = g.Key,
+                Cantidad = g.Count(),
+                Total = g.Sum(p => p.Monto)
+            })
+            .OrderBy(x => x.MetodoPago)
+            .ToListAsync(ct);
+        return ADataTable(filas, "MetodoPago", "Cantidad", "Total");
     }
 
-    private static DataTable Ejecutar(string sql, DateTime desde, DateTime hasta)
+    /// <summary>Convierte las filas de resultado en un DataTable con las columnas esperadas por la interfaz.</summary>
+    private static DataTable ADataTable<T>(IEnumerable<T> filas, params string[] columnas) where T : class
     {
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var cmd = new SqlCommand(sql, conn);
-        cmd.Parameters.AddWithValue("@Desde", desde.Date);
-        cmd.Parameters.AddWithValue("@Hasta", hasta.Date);
-        using var adapter = new SqlDataAdapter(cmd);
         var tabla = new DataTable();
-        adapter.Fill(tabla);
-        return tabla;
-    }
-
-    private static DataTable EjecutarProcedimiento(string nombre, DateTime desde, DateTime hasta)
-    {
-        using var conn = Conexion.ObtenerConexion();
-        conn.Open();
-        using var cmd = new SqlCommand(nombre, conn)
+        foreach (var columna in columnas)
         {
-            CommandType = CommandType.StoredProcedure
-        };
-        cmd.Parameters.AddWithValue("@Desde", desde.Date);
-        cmd.Parameters.AddWithValue("@Hasta", hasta.Date);
-        using var adapter = new SqlDataAdapter(cmd);
-        var tabla = new DataTable();
-        adapter.Fill(tabla);
+            var tipo = typeof(T).GetProperty(columna)?.PropertyType ?? typeof(object);
+            tabla.Columns.Add(columna, Nullable.GetUnderlyingType(tipo) ?? tipo);
+        }
+        foreach (var fila in filas)
+        {
+            var valores = new object?[columnas.Length];
+            for (var i = 0; i < columnas.Length; i++)
+            {
+                valores[i] = typeof(T).GetProperty(columnas[i])?.GetValue(fila);
+            }
+            tabla.Rows.Add(valores);
+        }
         return tabla;
     }
 }

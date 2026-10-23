@@ -9,6 +9,9 @@ public class Pago
     public string MetodoPago { get; set; } = string.Empty;
     public string? Observaciones { get; set; }
 
+    // Navegación EF Core (FK OrdenID). No genera columna nueva.
+    public OrdenServicio? Orden { get; set; }
+
     // Propiedad de visualización (JOIN con Clientes en las consultas de listado)
     public string ClienteNombre { get; set; } = string.Empty;
 }

@@ -15,6 +15,7 @@ public partial class FrmClienteFormulario : Form
     private readonly TextBox txtTelefono = new();
     private readonly TextBox txtEmail = new();
     private readonly TextBox txtDireccion = new();
+    private Button? _btnGuardar;
 
     public FrmClienteFormulario()
     {
@@ -98,6 +99,7 @@ public partial class FrmClienteFormulario : Form
         Estilos.BotonPrincipal(btnGuardar);
         btnGuardar.Click += BtnGuardar_Click;
         btnPanel.Controls.Add(btnGuardar);
+        _btnGuardar = btnGuardar;
 
         AcceptButton = btnGuardar;
         CancelButton = btnCancelar;
@@ -125,7 +127,7 @@ public partial class FrmClienteFormulario : Form
         return row + 1;
     }
 
-    private void BtnGuardar_Click(object? sender, EventArgs e)
+    private async void BtnGuardar_Click(object? sender, EventArgs e)
     {
         var nombre = txtNombre.Text.Trim();
         var apellido = txtApellido.Text.Trim();
@@ -145,35 +147,42 @@ public partial class FrmClienteFormulario : Form
             return;
         }
 
-        if (_cliente == null)
+        // Deshabilita el botón mientras se persiste: evita guardar dos veces por doble clic.
+        if (_btnGuardar != null) _btnGuardar.Enabled = false;
+        try
         {
-            var ok = UIHelper.EjecutarSeguro(this, () =>
+            if (_cliente == null)
             {
-                ClienteDAL.Insertar(new Cliente
-                {
-                    Nombre = nombre,
-                    Apellido = apellido,
-                    Telefono = telefono,
-                    Email = string.IsNullOrWhiteSpace(email) ? null : email,
-                    Direccion = string.IsNullOrWhiteSpace(direccion) ? null : direccion
-                });
-            }, "Clientes");
-            if (!ok) return;
-            MessageBox.Show(this, "Cliente registrado exitosamente.", "Clientes", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        else
-        {
-            _cliente.Nombre = nombre;
-            _cliente.Apellido = apellido;
-            _cliente.Telefono = telefono;
-            _cliente.Email = string.IsNullOrWhiteSpace(email) ? null : email;
-            _cliente.Direccion = string.IsNullOrWhiteSpace(direccion) ? null : direccion;
-            var ok = UIHelper.EjecutarSeguro(this, () => ClienteDAL.Actualizar(_cliente!), "Clientes");
-            if (!ok) return;
-            MessageBox.Show(this, "Cliente modificado exitosamente.", "Clientes", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
+                var ok = await UIHelper.EjecutarSeguroAsync(this, () =>
+                    ClienteDAL.InsertarAsync(new Cliente
+                    {
+                        Nombre = nombre,
+                        Apellido = apellido,
+                        Telefono = telefono,
+                        Email = string.IsNullOrWhiteSpace(email) ? null : email,
+                        Direccion = string.IsNullOrWhiteSpace(direccion) ? null : direccion
+                    }), "Clientes");
+                if (!ok) return;
+                MessageBox.Show(this, "Cliente registrado exitosamente.", "Clientes", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else
+            {
+                _cliente.Nombre = nombre;
+                _cliente.Apellido = apellido;
+                _cliente.Telefono = telefono;
+                _cliente.Email = string.IsNullOrWhiteSpace(email) ? null : email;
+                _cliente.Direccion = string.IsNullOrWhiteSpace(direccion) ? null : direccion;
+                var ok = await UIHelper.EjecutarSeguroAsync(this, () => ClienteDAL.ActualizarAsync(_cliente!), "Clientes");
+                if (!ok) return;
+                MessageBox.Show(this, "Cliente modificado exitosamente.", "Clientes", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
 
-        DialogResult = DialogResult.OK;
+            DialogResult = DialogResult.OK;
+        }
+        finally
+        {
+            if (_btnGuardar != null) _btnGuardar.Enabled = true;
+        }
     }
 
     private static bool EsEmailValido(string email) => email.Contains('@') && email.Contains('.');

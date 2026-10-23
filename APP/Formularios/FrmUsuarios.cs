@@ -15,6 +15,7 @@ public partial class FrmUsuarios : Form
     private readonly Button btnEditar = new();
     private readonly Button btnEstado = new();
     private readonly DataGridView grid = new();
+    private CancellationTokenSource? _ctsBusqueda;
 
     public FrmUsuarios()
     {
@@ -26,6 +27,7 @@ public partial class FrmUsuarios : Form
         }
         Text = "Usuarios";
         InitializeUi();
+        FormClosed += (_, _) => _ctsBusqueda?.Cancel();
         CargarDatos();
     }
 
@@ -133,20 +135,43 @@ public partial class FrmUsuarios : Form
         Controls.Add(header);
     }
 
-    private void CargarDatos()
+    /// <summary>Carga asíncrona con cancelación de la búsqueda anterior (evita respuestas viejas).</summary>
+    private async void CargarDatos()
     {
-        UIHelper.EjecutarSeguro(this, () =>
+        _ctsBusqueda?.Cancel();
+        _ctsBusqueda?.Dispose();
+        _ctsBusqueda = new CancellationTokenSource();
+        var token = _ctsBusqueda.Token;
+
+        grid.UseWaitCursor = true;
+        try
         {
-            grid.DataSource = UsuarioDAL.Buscar(txtBuscar.Text.Trim(), cboEstado.SelectedItem?.ToString());
+            var lista = await UsuarioDAL.BuscarAsync(
+                txtBuscar.Text.Trim(), cboEstado.SelectedItem?.ToString(), token);
+            token.ThrowIfCancellationRequested();
+            grid.DataSource = lista;
             grid.ClearSelection();
-        }, "Usuarios");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"No se pudo completar la operación.\n\n{ex.Message}",
+                "Usuarios", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            grid.UseWaitCursor = false;
+        }
     }
 
-    private Usuario? UsuarioSeleccionado()
+    private async Task<Usuario?> UsuarioSeleccionadoAsync()
     {
         if (grid.SelectedRows.Count == 0) return null;
         var id = Convert.ToInt32(grid.SelectedRows[0].Cells[0].Value);
-        return UsuarioDAL.ObtenerPorId(id);
+        return await UsuarioDAL.ObtenerPorIdAsync(id);
     }
 
     private void BtnNuevo_Click(object? sender, EventArgs e)
@@ -155,9 +180,9 @@ public partial class FrmUsuarios : Form
         if (f.ShowDialog(this) == DialogResult.OK) CargarDatos();
     }
 
-    private void BtnEditar_Click(object? sender, EventArgs e)
+    private async void BtnEditar_Click(object? sender, EventArgs e)
     {
-        var u = UsuarioSeleccionado();
+        var u = await UsuarioSeleccionadoAsync();
         if (u == null)
         {
             MessageBox.Show(this, "Seleccione un usuario.", "Usuarios", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -167,9 +192,9 @@ public partial class FrmUsuarios : Form
         if (f.ShowDialog(this) == DialogResult.OK) CargarDatos();
     }
 
-    private void BtnEstado_Click(object? sender, EventArgs e)
+    private async void BtnEstado_Click(object? sender, EventArgs e)
     {
-        var u = UsuarioSeleccionado();
+        var u = await UsuarioSeleccionadoAsync();
         if (u == null)
         {
             MessageBox.Show(this, "Seleccione un usuario.", "Usuarios", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -181,9 +206,9 @@ public partial class FrmUsuarios : Form
         {
             return;
         }
-        var ok = UIHelper.EjecutarSeguro(this, () =>
+        await UIHelper.EjecutarSeguroAsync(this, async () =>
         {
-            if (UsuarioDAL.CambiarEstado(u.UsuarioID))
+            if (await UsuarioDAL.CambiarEstadoAsync(u.UsuarioID))
             {
                 CargarDatos();
             }

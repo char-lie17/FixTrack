@@ -28,6 +28,8 @@ public partial class FrmOrdenDetalle : Form
     private readonly Label lblSaldo = new();
     private bool _cargando;
     private string _estadoActual = string.Empty;
+    private Button? _btnGuardar;
+    private CancellationTokenSource? _cts;
 
     public FrmOrdenDetalle(int ordenId)
     {
@@ -38,16 +40,8 @@ public partial class FrmOrdenDetalle : Form
             return;
         }
 
-        if (Sesion.EsTecnico && Sesion.TecnicoID.HasValue)
-        {
-            var orden = OrdenServicioDAL.ObtenerPorId(ordenId);
-            if (orden != null && orden.TecnicoID != Sesion.TecnicoID.Value)
-            {
-                MessageBox.Show("No puede acceder a órdenes de otros técnicos.", "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                Close();
-                return;
-            }
-        }
+        // La verificación de acceso (consulta a BD) y la carga inicial se hacen de forma
+        // asíncrona al mostrarse el diálogo, para no bloquear el hilo de interfaz.
         _ordenId = ordenId;
         Text = $"Detalle de orden #{ordenId}";
         StartPosition = FormStartPosition.CenterParent;
@@ -55,7 +49,26 @@ public partial class FrmOrdenDetalle : Form
         BackColor = Color.White;
         Font = Estilos.Fuente(9);
         InitializeUi();
-        Cargar();
+        FormClosed += (_, _) => _cts?.Cancel();
+        Shown += async (_, _) => await InicializarAsync();
+    }
+
+    /// <summary>
+    /// Verifica el acceso del técnico (si aplica) y carga la orden, sus pagos e historial.
+    /// </summary>
+    private async Task InicializarAsync()
+    {
+        if (Sesion.EsTecnico && Sesion.TecnicoID.HasValue)
+        {
+            var orden = await OrdenServicioDAL.ObtenerPorIdAsync(_ordenId);
+            if (orden != null && orden.TecnicoID != Sesion.TecnicoID.Value)
+            {
+                MessageBox.Show("No puede acceder a órdenes de otros técnicos.", "Acceso denegado", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                Close();
+                return;
+            }
+        }
+        await CargarAsync();
     }
 
     private void InitializeUi()
@@ -135,6 +148,7 @@ public partial class FrmOrdenDetalle : Form
         Estilos.BotonPrincipal(btnGuardar);
         btnGuardar.Click += BtnGuardar_Click;
         btnPanel.Controls.Add(btnGuardar);
+        _btnGuardar = btnGuardar;
 
         // Panel derecho - pagos
         var rightPanel = new Panel { Dock = DockStyle.Fill, Padding = new Padding(8, 8, 0, 8) };
@@ -236,45 +250,59 @@ public partial class FrmOrdenDetalle : Form
         return row + 1;
     }
 
-    private void Cargar()
+    private async Task CargarAsync()
     {
         _cargando = true;
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        var token = _cts.Token;
         try
         {
-            UIHelper.EjecutarSeguro(this, () =>
+            var o = await OrdenServicioDAL.ObtenerPorIdAsync(_ordenId, token);
+            if (o == null)
             {
-                var o = OrdenServicioDAL.ObtenerPorId(_ordenId);
-                if (o == null)
-                {
-                    MessageBox.Show(this, "La orden no existe.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    Close();
-                    return;
-                }
-                txtCliente.Text = o.ClienteNombre ?? string.Empty;
-                txtDispositivo.Text = o.DispositivoTexto ?? string.Empty;
-                txtTecnico.Text = o.TecnicoNombre ?? string.Empty;
-                txtProblema.Text = o.ProblemaReportado ?? string.Empty;
-                txtObservaciones.Text = o.Observaciones ?? string.Empty;
-                numCosto.Value = o.CostoServicio;
-                SeleccionarEstado(o.Estado);
-                _estadoActual = o.Estado;
+                MessageBox.Show(this, "La orden no existe.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                Close();
+                return;
+            }
+            txtCliente.Text = o.ClienteNombre ?? string.Empty;
+            txtDispositivo.Text = o.DispositivoTexto ?? string.Empty;
+            txtTecnico.Text = o.TecnicoNombre ?? string.Empty;
+            txtProblema.Text = o.ProblemaReportado ?? string.Empty;
+            txtObservaciones.Text = o.Observaciones ?? string.Empty;
+            numCosto.Value = o.CostoServicio;
+            SeleccionarEstado(o.Estado);
+            _estadoActual = o.Estado;
 
-                txtDiagnostico.Text = o.Diagnostico ?? string.Empty;
-                txtTrabajoRealizado.Text = o.TrabajoRealizado ?? string.Empty;
+            txtDiagnostico.Text = o.Diagnostico ?? string.Empty;
+            txtTrabajoRealizado.Text = o.TrabajoRealizado ?? string.Empty;
 
-                dtFechaIngreso.Value = o.FechaIngreso;
-                dtFechaFinalizacion.Value = o.FechaFinalizacion ?? DateTime.Today;
-                dtFechaFinalizacion.Enabled = Sesion.EsAdministrador || Sesion.EsEmpleado;
+            dtFechaIngreso.Value = o.FechaIngreso;
+            dtFechaFinalizacion.Value = o.FechaFinalizacion ?? DateTime.Today;
+            dtFechaFinalizacion.Enabled = Sesion.EsAdministrador || Sesion.EsEmpleado;
 
-                var pagos = PagoDAL.ObtenerPorOrden(_ordenId);
-                gridPagos.DataSource = pagos;
-                gridHistorial.DataSource = OrdenServicioDAL.ObtenerHistorial(_ordenId);
-                var total = pagos?.Sum(p => p.Monto) ?? 0m;
-                lblTotalPagado.Text = total.ToString("C2");
-                var saldo = o.CostoServicio - total;
-                lblSaldo.Text = saldo.ToString("C2");
-                lblSaldo.ForeColor = saldo <= 0 ? Color.Green : Color.Red;
-            }, "Ordenes");
+            var pagos = await PagoDAL.ObtenerPorOrdenAsync(_ordenId, token);
+            var historial = await OrdenServicioDAL.ObtenerHistorialAsync(_ordenId, token);
+            token.ThrowIfCancellationRequested();
+
+            gridPagos.DataSource = pagos;
+            gridHistorial.DataSource = historial;
+            var total = pagos?.Sum(p => p.Monto) ?? 0m;
+            lblTotalPagado.Text = total.ToString("C2");
+            var saldo = o.CostoServicio - total;
+            lblSaldo.Text = saldo.ToString("C2");
+            lblSaldo.ForeColor = saldo <= 0 ? Color.Green : Color.Red;
+        }
+        catch (OperationCanceledException)
+        {
+            // Recarga cancelada por otra recarga o cierre del formulario: se ignora.
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"No se pudo cargar la orden.\n\n{ex.Message}",
+                "Ordenes", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
         {
@@ -292,7 +320,7 @@ public partial class FrmOrdenDetalle : Form
             }
     }
 
-    private void CboEstado_SelectionChange(object? sender, EventArgs e)
+    private async void CboEstado_SelectionChange(object? sender, EventArgs e)
     {
         if (_cargando) return;
         if (cboEstado.SelectedItem is not EstadoItem item) return;
@@ -324,33 +352,48 @@ public partial class FrmOrdenDetalle : Form
             return;
         }
 
-        // Actualizar estado. Si la DAL no modifica filas, se revierte la selección.
-        var actualizado = UIHelper.EjecutarSeguro(this, () =>
-            OrdenServicioDAL.ActualizarEstado(_ordenId, nuevoEstado), "Ordenes");
-        if (!actualizado)
+        // Actualizar estado de forma condicional (optimista): la DAL devuelve false
+        // si el estado en BD ya no es el esperado (otro usuario lo cambió primero).
+        bool actualizado = false;
+        var ok = await UIHelper.EjecutarSeguroAsync(this, async () =>
+        {
+            actualizado = await OrdenServicioDAL.ActualizarEstadoAsync(_ordenId, nuevoEstado);
+        }, "Ordenes");
+        if (!ok)
         {
             SeleccionarEstado(_estadoActual);
             return;
         }
+        if (!actualizado)
+        {
+            MessageBox.Show(this,
+                "Otro usuario modificó la orden mientras usted la veía. Se recargará el detalle.",
+                "Conflicto de concurrencia", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            await CargarAsync();
+            return;
+        }
         _estadoActual = nuevoEstado;
+        // Refrescar pagos/historial por si cambió el total.
+        await CargarAsync();
     }
 
     private void BtnPago_Click(object? sender, EventArgs e)
     {
         using var f = new FrmPagoFormulario(_ordenId);
-        if (f.ShowDialog(this) == DialogResult.OK) Cargar();
+        if (f.ShowDialog(this) == DialogResult.OK) _ = CargarAsync();
     }
 
-    private void BtnGuardar_Click(object? sender, EventArgs e)
+    private async void BtnGuardar_Click(object? sender, EventArgs e)
     {
         OrdenServicio? o = null;
         decimal totalPagado = 0m;
 
-        UIHelper.EjecutarSeguro(this, () =>
+        var okLectura = await UIHelper.EjecutarSeguroAsync(this, async () =>
         {
-            o = OrdenServicioDAL.ObtenerPorId(_ordenId);
-            if (o != null) totalPagado = PagoDAL.ObtenerTotalPagado(_ordenId);
+            o = await OrdenServicioDAL.ObtenerPorIdAsync(_ordenId);
+            if (o != null) totalPagado = await PagoDAL.ObtenerTotalPagadoAsync(_ordenId);
         }, "Ordenes");
+        if (!okLectura) return;
 
         if (o == null)
         {
@@ -377,10 +420,23 @@ public partial class FrmOrdenDetalle : Form
             o.FechaFinalizacion = dtFechaFinalizacion.Value;
         }
 
-        var actualizado = UIHelper.EjecutarSeguro(this, () => OrdenServicioDAL.ActualizarDetalle(o), "Ordenes");
-        if (actualizado)
-            MessageBox.Show("Orden actualizada.", "Ordenes", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        else
-            MessageBox.Show(this, "No se pudo actualizar la orden.", "Ordenes", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        if (_btnGuardar != null) _btnGuardar.Enabled = false;
+        try
+        {
+            var ok = await UIHelper.EjecutarSeguroAsync(this, () => OrdenServicioDAL.ActualizarDetalleAsync(o!), "Ordenes");
+            if (ok == true)
+            {
+                MessageBox.Show("Orden actualizada.", "Ordenes", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                await CargarAsync();
+            }
+            else if (ok == false)
+            {
+                MessageBox.Show(this, "No se pudo actualizar la orden.", "Ordenes", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+        finally
+        {
+            if (_btnGuardar != null) _btnGuardar.Enabled = true;
+        }
     }
 }

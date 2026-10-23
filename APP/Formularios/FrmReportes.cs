@@ -20,6 +20,7 @@ public partial class FrmReportes : Form
     private readonly Button btnExportar = new();
     private readonly DataGridView grid = new();
     private DataTable? _tablaActual;
+    private CancellationTokenSource? _ctsReporte;
 
     public FrmReportes()
     {
@@ -31,6 +32,7 @@ public partial class FrmReportes : Form
         }
         Text = "Reportes";
         InitializeUi();
+        FormClosed += (_, _) => _ctsReporte?.Cancel();
         EstablecerRangoPorDefecto();
     }
 
@@ -171,7 +173,7 @@ public partial class FrmReportes : Form
         dtDesde.Value = DateTime.Today.AddDays(-30);
     }
 
-    private void BtnGenerar_Click(object? sender, EventArgs e)
+    private async void BtnGenerar_Click(object? sender, EventArgs e)
     {
         var desde = dtDesde.Value.Date;
         var hasta = dtHasta.Value.Date;
@@ -184,20 +186,44 @@ public partial class FrmReportes : Form
 
         var reporte = cboReporte.SelectedItem?.ToString() ?? string.Empty;
 
-        UIHelper.EjecutarSeguro(this, () =>
+        // Cancelar la generación anterior si todavía está en curso.
+        _ctsReporte?.Cancel();
+        _ctsReporte?.Dispose();
+        _ctsReporte = new CancellationTokenSource();
+        var token = _ctsReporte.Token;
+
+        btnGenerar.Enabled = false;
+        grid.UseWaitCursor = true;
+        try
         {
             _tablaActual = reporte switch
             {
-                "Órdenes por estado" => ReportesDAL.ObtenerOrdenesPorEstado(desde, hasta),
-                "Órdenes por técnico" => ReportesDAL.ObtenerOrdenesPorTecnico(desde, hasta),
-                "Servicios completados" => ReportesDAL.ObtenerServiciosCompletados(desde, hasta),
-                "Pagos registrados" => ReportesDAL.ObtenerPagosRegistrados(desde, hasta),
+                "Órdenes por estado" => await ReportesDAL.ObtenerOrdenesPorEstadoAsync(desde, hasta, token),
+                "Órdenes por técnico" => await ReportesDAL.ObtenerOrdenesPorTecnicoAsync(desde, hasta, token),
+                "Servicios completados" => await ReportesDAL.ObtenerServiciosCompletadosAsync(desde, hasta, token),
+                "Pagos registrados" => await ReportesDAL.ObtenerPagosRegistradosAsync(desde, hasta, token),
                 _ => new DataTable()
             };
 
+            token.ThrowIfCancellationRequested();
             grid.DataSource = _tablaActual;
             grid.AutoResizeColumns(DataGridViewAutoSizeColumnsMode.AllCells);
-        }, "Reportes");
+        }
+        catch (OperationCanceledException)
+        {
+            // Generación sustituida por otra más reciente o formulario cerrado: se ignora.
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"No se pudo generar el reporte.\n\n{ex.Message}",
+                "Reportes", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            btnGenerar.Enabled = true;
+            grid.UseWaitCursor = false;
+        }
     }
 
     private void BtnExportar_Click(object? sender, EventArgs e)

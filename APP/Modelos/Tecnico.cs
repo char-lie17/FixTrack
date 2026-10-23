@@ -9,6 +9,9 @@ public class Tecnico
     public string? Especialidad { get; set; }
     public string Estado { get; set; } = "Activo";
 
+    // Navegación EF Core (relación Tecnicos 1 — * OrdenesServicio). No genera columna nueva.
+    public ICollection<OrdenServicio> Ordenes { get; set; } = new List<OrdenServicio>();
+
     // Ayuda para ComboBox
     public string NombreCompleto => $"{Nombre} {Apellido}";
 }

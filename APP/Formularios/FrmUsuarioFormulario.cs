@@ -16,6 +16,7 @@ public partial class FrmUsuarioFormulario : Form
     private readonly ComboBox cboRol = new();
     private readonly ComboBox cboTecnico = new();
     private readonly Label lblPasswordHint = new();
+    private Button? _btnGuardar;
 
     public FrmUsuarioFormulario()
     {
@@ -44,10 +45,7 @@ public partial class FrmUsuarioFormulario : Form
         txtNombreUsuario.Text = usuario.NombreUsuario;
         txtNombreUsuario.ReadOnly = true; // No se permite cambiar el nombre de usuario al editar
         cboRol.SelectedItem = usuario.Rol;
-        if (usuario.TecnicoID.HasValue)
-        {
-            SeleccionarTecnico(usuario.TecnicoID.Value);
-        }
+        // La selección del técnico actual se aplica al terminar de cargar el combo (CargarTecnicosAsync).
         lblPasswordHint.Visible = true;
         txtPassword.PasswordChar = '•';
         txtPassword.PlaceholderText = "Dejar vacío para no cambiar la contraseña";
@@ -101,7 +99,8 @@ public partial class FrmUsuarioFormulario : Form
         cboTecnico.DropDownStyle = ComboBoxStyle.DropDownList;
         cboTecnico.Enabled = false;
         cboTecnico.Dock = DockStyle.Fill;
-        CargarTecnicos();
+        // Los técnicos se cargan de forma asíncrona (CargarTecnicosAsync) para no bloquear la UI.
+        CargarTecnicosAsync();
 
         // Botones
         var btnPanel = new FlowLayoutPanel
@@ -123,6 +122,7 @@ public partial class FrmUsuarioFormulario : Form
         Estilos.BotonPrincipal(btnGuardar);
         btnGuardar.Click += BtnGuardar_Click;
         btnPanel.Controls.Add(btnGuardar);
+        _btnGuardar = btnGuardar;
 
         AcceptButton = btnGuardar;
         CancelButton = btnCancelar;
@@ -160,24 +160,37 @@ public partial class FrmUsuarioFormulario : Form
         }
     }
 
-    private void CargarTecnicos()
+    private async void CargarTecnicosAsync()
     {
-        var tecnicos = TecnicoDAL.ObtenerActivos();
-        var lista = tecnicos.ToList();
-        // Incluir técnico actualmente asociado aunque esté inactivo
-        if (_usuario?.TecnicoID.HasValue == true)
+        try
         {
-            var activo = lista.Any(t => t.TecnicoID == _usuario.TecnicoID.Value);
-            if (!activo)
+            var tecnicos = await TecnicoDAL.ObtenerActivosAsync();
+            var lista = tecnicos.ToList();
+            // Incluir técnico actualmente asociado aunque esté inactivo
+            if (_usuario?.TecnicoID.HasValue == true)
             {
-                var inactivo = TecnicoDAL.ObtenerPorId(_usuario.TecnicoID.Value);
-                if (inactivo != null) lista.Add(inactivo);
+                var activo = lista.Any(t => t.TecnicoID == _usuario.TecnicoID.Value);
+                if (!activo)
+                {
+                    var inactivo = await TecnicoDAL.ObtenerPorIdAsync(_usuario.TecnicoID.Value);
+                    if (inactivo != null) lista.Add(inactivo);
+                }
+            }
+            cboTecnico.DataSource = lista;
+            cboTecnico.DisplayMember = "NombreCompleto";
+            cboTecnico.ValueMember = "TecnicoID";
+            cboTecnico.SelectedIndex = -1;
+            if (_usuario?.TecnicoID != null)
+            {
+                SeleccionarTecnico(_usuario.TecnicoID.Value);
             }
         }
-        cboTecnico.DataSource = lista;
-        cboTecnico.DisplayMember = "NombreCompleto";
-        cboTecnico.ValueMember = "TecnicoID";
-        cboTecnico.SelectedIndex = -1;
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"No se pudieron cargar los técnicos.\n\n{ex.Message}",
+                "Usuarios", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     private void SeleccionarTecnico(int tecnicoId)
@@ -192,7 +205,7 @@ public partial class FrmUsuarioFormulario : Form
         }
     }
 
-    private void BtnGuardar_Click(object? sender, EventArgs e)
+    private async void BtnGuardar_Click(object? sender, EventArgs e)
     {
         var nombreUsuario = txtNombreUsuario.Text.Trim();
         var password = txtPassword.Text;
@@ -225,7 +238,7 @@ public partial class FrmUsuarioFormulario : Form
         }
 
         var excluirId = _usuario?.UsuarioID ?? 0;
-        if (UsuarioDAL.ExisteNombreUsuario(nombreUsuario, excluirId))
+        if (await UsuarioDAL.ExisteNombreUsuarioAsync(nombreUsuario, excluirId))
         {
             MessageBox.Show(this, "El nombre de usuario ya existe. Elija otro.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
@@ -233,48 +246,54 @@ public partial class FrmUsuarioFormulario : Form
 
         if (tecnicoId.HasValue)
         {
-            var todosUsuarios = UsuarioDAL.ObtenerTodos();
+            var todosUsuarios = await UsuarioDAL.ObtenerTodosAsync();
             var tecnicoYaAsociado = todosUsuarios.Any(u => u.TecnicoID == tecnicoId && u.UsuarioID != excluirId);
             if (tecnicoYaAsociado)
             {
-                var tecnico = TecnicoDAL.ObtenerPorId(tecnicoId.Value);
+                var tecnico = await TecnicoDAL.ObtenerPorIdAsync(tecnicoId.Value);
                 MessageBox.Show(this, $"El técnico «{tecnico?.NombreCompleto}» ya está asociado a otro usuario.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
         }
 
-        if (_usuario == null)
+        if (_btnGuardar != null) _btnGuardar.Enabled = false;
+        try
         {
-            var hash = Seguridad.Hashear(password);
-            var ok = UIHelper.EjecutarSeguro(this, () =>
+            if (_usuario == null)
             {
-                UsuarioDAL.Insertar(new Usuario
-                {
-                    NombreUsuario = nombreUsuario,
-                    PasswordHash = hash,
-                    Rol = rol,
-                    TecnicoID = tecnicoId
-                });
-            }, "Usuarios");
-            if (!ok) return;
-            MessageBox.Show(this, "Usuario registrado exitosamente.", "Usuarios", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        else
-        {
-            _usuario.NombreUsuario = nombreUsuario;
-            _usuario.Rol = rol;
-            _usuario.TecnicoID = tecnicoId;
+                var hash = Seguridad.Hashear(password);
+                var ok = await UIHelper.EjecutarSeguroAsync(this, () =>
+                    UsuarioDAL.InsertarAsync(new Usuario
+                    {
+                        NombreUsuario = nombreUsuario,
+                        PasswordHash = hash,
+                        Rol = rol,
+                        TecnicoID = tecnicoId
+                    }), "Usuarios");
+                if (!ok) return;
+                MessageBox.Show(this, "Usuario registrado exitosamente.", "Usuarios", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else
+            {
+                _usuario.NombreUsuario = nombreUsuario;
+                _usuario.Rol = rol;
+                _usuario.TecnicoID = tecnicoId;
 
-            if (!string.IsNullOrWhiteSpace(password))
-            {
-                _usuario.PasswordHash = Seguridad.Hashear(password);
+                if (!string.IsNullOrWhiteSpace(password))
+                {
+                    _usuario.PasswordHash = Seguridad.Hashear(password);
+                }
+
+                var ok = await UIHelper.EjecutarSeguroAsync(this, () => UsuarioDAL.ActualizarAsync(_usuario!), "Usuarios");
+                if (!ok) return;
+                MessageBox.Show(this, "Usuario modificado exitosamente.", "Usuarios", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
 
-            var ok = UIHelper.EjecutarSeguro(this, () => UsuarioDAL.Actualizar(_usuario!), "Usuarios");
-            if (!ok) return;
-            MessageBox.Show(this, "Usuario modificado exitosamente.", "Usuarios", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            DialogResult = DialogResult.OK;
         }
-
-        DialogResult = DialogResult.OK;
+        finally
+        {
+            if (_btnGuardar != null) _btnGuardar.Enabled = true;
+        }
     }
 }

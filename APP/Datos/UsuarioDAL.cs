@@ -1,192 +1,123 @@
-﻿using System.Text;
-using FixTrack.Modelos;
+﻿using FixTrack.Modelos;
 using Microsoft.Data.SqlClient;
+using Microsoft.EntityFrameworkCore;
 
 namespace FixTrack.Datos;
 
+/// <summary>Acceso a datos de usuarios sobre EF Core (migrado desde ADO.NET).</summary>
 public static class UsuarioDAL
 {
-    private const string SelectConJoin = @"
-SELECT u.UsuarioID, u.NombreUsuario, u.PasswordHash, u.Rol, u.Estado, u.TecnicoID,
-       t.Nombre + ' ' + t.Apellido AS NombreTecnico
-FROM Usuarios u
-LEFT JOIN Tecnicos t ON u.TecnicoID = t.TecnicoID";
+    /// <summary>Proyección compartida: incluye el hash para autenticación y el nombre del técnico asociado.</summary>
+    private static IQueryable<Usuario> Proyectar(IQueryable<Usuario> query) =>
+        query.Select(u => new Usuario
+        {
+            UsuarioID = u.UsuarioID,
+            NombreUsuario = u.NombreUsuario,
+            PasswordHash = u.PasswordHash,
+            Rol = u.Rol,
+            Estado = u.Estado,
+            TecnicoID = u.TecnicoID,
+            NombreTecnico = u.Tecnico != null ? u.Tecnico.Nombre + " " + u.Tecnico.Apellido : string.Empty
+        });
 
-    public static List<Usuario> ObtenerTodos()
+    public static Task<List<Usuario>> ObtenerTodosAsync(CancellationToken ct = default)
+        => BuscarAsync(null, null, ct);
+
+    public static async Task<List<Usuario>> BuscarAsync(string? texto, string? estado, CancellationToken ct = default)
     {
-        try
+        var textoLimpio = texto?.Trim();
+        var esId = int.TryParse(textoLimpio, out var idBuscado);
+
+        await using var db = FixTrackDb.Crear();
+        var query = db.Usuarios.AsNoTracking();
+
+        if (esId)
+            query = query.Where(u => u.UsuarioID == idBuscado);
+        else if (!string.IsNullOrWhiteSpace(textoLimpio))
         {
-            return Buscar(null, null);
+            var t = $"%{textoLimpio}%";
+            query = query.Where(u => EF.Functions.Like(u.NombreUsuario, t)
+                                  || EF.Functions.Like(u.Rol, t));
         }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener la lista de usuarios.", ex);
-        }
+        if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
+            query = query.Where(u => u.Estado == estado);
+
+        return await Proyectar(query)
+            .OrderBy(u => u.NombreUsuario)
+            .ToListAsync(ct);
     }
 
-    public static List<Usuario> Buscar(string? texto, string? estado)
+    public static async Task<Usuario?> ObtenerPorIdAsync(int id, CancellationToken ct = default)
     {
-        try
-        {
-            var textoLimpio = texto?.Trim();
-            var esId = int.TryParse(textoLimpio, out var idBuscado);
-
-            var sql = new StringBuilder(SelectConJoin);
-            sql.Append(" WHERE 1 = 1");
-            if (esId)
-                sql.Append(" AND u.UsuarioID = @UsuarioIDBuscado");
-            else if (!string.IsNullOrWhiteSpace(textoLimpio))
-                sql.Append(" AND (u.NombreUsuario LIKE @Texto OR u.Rol LIKE @Texto)");
-            if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
-                sql.Append(" AND u.Estado = @Estado");
-            sql.Append(" ORDER BY u.NombreUsuario");
-
-            var lista = new List<Usuario>();
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(sql.ToString(), conn);
-            if (esId)
-                cmd.Parameters.AddWithValue("@UsuarioIDBuscado", idBuscado);
-            else if (!string.IsNullOrWhiteSpace(textoLimpio))
-                cmd.Parameters.AddWithValue("@Texto", $"%{textoLimpio}%");
-            if (!string.IsNullOrWhiteSpace(estado) && estado != "Todos")
-                cmd.Parameters.AddWithValue("@Estado", estado);
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read()) lista.Add(Leer(reader));
-            return lista;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al buscar usuarios.", ex);
-        }
-    }
-
-    public static Usuario? ObtenerPorId(int id)
-    {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(SelectConJoin + " WHERE u.UsuarioID = @UsuarioID", conn);
-            cmd.Parameters.AddWithValue("@UsuarioID", id);
-            using var reader = cmd.ExecuteReader();
-            return reader.Read() ? Leer(reader) : null;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener el usuario.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await Proyectar(db.Usuarios.AsNoTracking())
+            .FirstOrDefaultAsync(u => u.UsuarioID == id, ct);
     }
 
     /// <summary>Consulta del login: obtiene usuario, hash y rol por nombre de usuario.</summary>
-    public static Usuario? ObtenerPorNombreUsuario(string nombreUsuario)
+    public static async Task<Usuario?> ObtenerPorNombreUsuarioAsync(string nombreUsuario, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(SelectConJoin + " WHERE u.NombreUsuario = @NombreUsuario", conn);
-            cmd.Parameters.AddWithValue("@NombreUsuario", nombreUsuario);
-            using var reader = cmd.ExecuteReader();
-            return reader.Read() ? Leer(reader) : null;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al obtener el usuario por nombre.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await Proyectar(db.Usuarios.AsNoTracking())
+            .FirstOrDefaultAsync(u => u.NombreUsuario == nombreUsuario, ct);
     }
 
-    public static bool ExisteNombreUsuario(string nombreUsuario, int excluirUsuarioId = 0)
+    public static async Task<bool> ExisteNombreUsuarioAsync(string nombreUsuario, int excluirUsuarioId = 0,
+        CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(@"
-SELECT COUNT(1) FROM Usuarios
-WHERE NombreUsuario = @NombreUsuario AND UsuarioID <> @ExcluirId", conn);
-            cmd.Parameters.AddWithValue("@NombreUsuario", nombreUsuario);
-            cmd.Parameters.AddWithValue("@ExcluirId", excluirUsuarioId);
-            return (int)cmd.ExecuteScalar() > 0;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al verificar el nombre de usuario.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        return await db.Usuarios.AsNoTracking()
+            .AnyAsync(u => u.NombreUsuario == nombreUsuario && u.UsuarioID != excluirUsuarioId, ct);
     }
 
-    public static int Insertar(Usuario u)
+    public static async Task<int> InsertarAsync(Usuario u, CancellationToken ct = default)
     {
+        await using var db = FixTrackDb.Crear();
+        u.Estado = "Activo";
+        db.Usuarios.Add(u);
         try
         {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(@"
-INSERT INTO Usuarios (NombreUsuario, PasswordHash, Rol, Estado, TecnicoID)
-VALUES (@NombreUsuario, @PasswordHash, @Rol, 'Activo', @TecnicoID);
-SELECT CAST(SCOPE_IDENTITY() AS INT);", conn);
-            cmd.Parameters.AddWithValue("@NombreUsuario", u.NombreUsuario);
-            cmd.Parameters.AddWithValue("@PasswordHash", u.PasswordHash);
-            cmd.Parameters.AddWithValue("@Rol", u.Rol);
-            cmd.Parameters.AddWithValue("@TecnicoID", (object?)u.TecnicoID ?? DBNull.Value);
-            return (int)cmd.ExecuteScalar();
+            await db.SaveChangesAsync(ct);
         }
-        catch (SqlException ex)
+        catch (DbUpdateException ex) when (ex.InnerException is SqlException { Number: 2601 or 2627 })
         {
-            throw new ApplicationException("Error al registrar el usuario.", ex);
+            // UQ_Usuarios_NombreUsuario (o UQ_Usuarios_TecnicoID): carrera entre dos administradores.
+            throw new ApplicationException("El nombre de usuario ya existe o el técnico está asociado a otro usuario.", ex);
         }
+        return u.UsuarioID;
     }
 
-    public static bool Actualizar(Usuario u)
+    public static async Task<bool> ActualizarAsync(Usuario u, CancellationToken ct = default)
     {
+        await using var db = FixTrackDb.Crear();
+        var existente = await db.Usuarios
+            .FirstOrDefaultAsync(x => x.UsuarioID == u.UsuarioID, ct);
+        if (existente == null) return false;
+
+        existente.NombreUsuario = u.NombreUsuario;
+        existente.PasswordHash = u.PasswordHash;
+        existente.Rol = u.Rol;
+        existente.TecnicoID = u.TecnicoID;
+        // Estado no se toca: la edición conserva el valor de BD (mismo comportamiento anterior).
         try
         {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(@"
-UPDATE Usuarios SET NombreUsuario = @NombreUsuario,
-    PasswordHash = @PasswordHash, Rol = @Rol, TecnicoID = @TecnicoID
-WHERE UsuarioID = @UsuarioID", conn);
-            cmd.Parameters.AddWithValue("@NombreUsuario", u.NombreUsuario);
-            cmd.Parameters.AddWithValue("@PasswordHash", u.PasswordHash);
-            cmd.Parameters.AddWithValue("@Rol", u.Rol);
-            cmd.Parameters.AddWithValue("@TecnicoID", (object?)u.TecnicoID ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@UsuarioID", u.UsuarioID);
-            return cmd.ExecuteNonQuery() > 0;
+            await db.SaveChangesAsync(ct);
         }
-        catch (SqlException ex)
+        catch (DbUpdateException ex) when (ex.InnerException is SqlException { Number: 2601 or 2627 })
         {
-            throw new ApplicationException("Error al actualizar el usuario.", ex);
+            throw new ApplicationException("El nombre de usuario ya existe o el técnico está asociado a otro usuario.", ex);
         }
+        return true;
     }
 
-    public static bool CambiarEstado(int id)
+    /// <summary>Baja lógica: alterna Activo/Inactivo.</summary>
+    public static async Task<bool> CambiarEstadoAsync(int id, CancellationToken ct = default)
     {
-        try
-        {
-            using var conn = Conexion.ObtenerConexion();
-            conn.Open();
-            using var cmd = new SqlCommand(@"
-UPDATE Usuarios SET Estado =
-    CASE WHEN Estado = 'Activo' THEN 'Inactivo' ELSE 'Activo' END
-WHERE UsuarioID = @UsuarioID", conn);
-            cmd.Parameters.AddWithValue("@UsuarioID", id);
-            return cmd.ExecuteNonQuery() > 0;
-        }
-        catch (SqlException ex)
-        {
-            throw new ApplicationException("Error al cambiar el estado del usuario.", ex);
-        }
+        await using var db = FixTrackDb.Crear();
+        var usuario = await db.Usuarios.FirstOrDefaultAsync(u => u.UsuarioID == id, ct);
+        if (usuario == null) return false;
+        usuario.Estado = usuario.Estado == "Activo" ? "Inactivo" : "Activo";
+        await db.SaveChangesAsync(ct);
+        return true;
     }
-
-    private static Usuario Leer(SqlDataReader r) => new()
-    {
-        UsuarioID = r.GetInt32(0),
-        NombreUsuario = r.GetString(1),
-        PasswordHash = r.GetString(2),
-        Rol = r.GetString(3),
-        Estado = r.GetString(4),
-        TecnicoID = r.IsDBNull(5) ? null : r.GetInt32(5),
-        NombreTecnico = r.IsDBNull(6) ? string.Empty : r.GetString(6)
-    };
 }

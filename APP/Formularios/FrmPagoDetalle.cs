@@ -44,21 +44,23 @@ public partial class FrmPagoDetalle : Form
         Controls.Add(header);
         Controls.Add(bottomPanel);
 
-        Cargar(pagoId);
+        // La carga (dos consultas) se hace asíncrona al mostrarse el diálogo,
+        // para no bloquear el hilo de interfaz.
+        Shown += async (_, _) => await CargarAsync(pagoId);
     }
 
-    private void Cargar(int pagoId)
+    private async Task CargarAsync(int pagoId)
     {
-        UIHelper.EjecutarSeguro(this, () =>
+        try
         {
-            var p = PagoDAL.ObtenerPorId(pagoId);
+            var p = await PagoDAL.ObtenerPorIdAsync(pagoId);
             if (p == null)
             {
                 MessageBox.Show(this, "El pago no existe.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 Close();
                 return;
             }
-            var o = OrdenServicioDAL.ObtenerPorId(p.OrdenID);
+            var o = await OrdenServicioDAL.ObtenerPorIdAsync(p.OrdenID);
 
             grid.ColumnCount = 2;
             grid.Columns[0].Name = "Campo";
@@ -79,6 +81,12 @@ public partial class FrmPagoDetalle : Form
             };
             foreach (var r in rows)
                 grid.Rows.Add(r);
-        }, "Pagos");
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this,
+                $"No se pudo cargar el detalle del pago.\n\n{ex.Message}",
+                "Pagos", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 }
