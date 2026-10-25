@@ -8,6 +8,9 @@ using Microsoft.Data.SqlClient;
 int ok = 0;
 int fail = 0;
 
+// Los DAL usan FixTrackDb (fábrica de DbContext): se inicializa igual que en Program.Main de la app.
+FixTrackDb.Inicializar();
+
 void Reportar(string prueba, bool exito, string detalle)
 {
     Console.WriteLine($"  [{(exito ? "OK" : "FALLO")}] {prueba} - {detalle}");
