@@ -1,0 +1,16 @@
+﻿MigrationId                                                                                                                                            ProductVersion                  
+------------------------------------------------------------------------------------------------------------------------------------------------------ --------------------------------
+20261023004419_Inicial                                                                                                                                 10.0.13                         
+
+(1 rows affected)
+conteo                     
+---------------------------
+Clientes=8                 
+Dispositivos=9             
+OrdenesServicio=8          
+Pagos=5                    
+Usuarios=5                 
+Tecnicos=3                 
+HistorialOrdenes=9         
+
+(7 rows affected)
